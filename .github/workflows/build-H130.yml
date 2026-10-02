@@ -24,18 +24,15 @@ jobs:
         with:
           swap-size-gb: 5
 
-      - name: Configure Fast APT Mirror
-        uses: vegardit/fast-apt-mirror.sh@v1
-
       - name: Prepare environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y git automake flex lzop bison gperf build-essential zip curl \
-            zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev \
-            squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev \
-            pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl \
-            bc libc6-dev-i386 libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler \
-            gcc-aarch64-linux-gnu python3 python3-dev python3-venv swig libelf-dev
+          sudo apt-get install -y bc bison build-essential ccache curl flex gawk \
+            git gnupg gperf imagemagick libncurses-dev \
+            lib32readline-dev lib32z1-dev liblz4-tool \
+            libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev python3 \
+            cmake libelf-dev libdw-dev device-tree-compiler swig
           mkdir -p $GITHUB_WORKSPACE/workdir
           cd $GITHUB_WORKSPACE/workdir
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
@@ -107,7 +104,7 @@ jobs:
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp source/out/arch/arm64/boot/Image.gz AnyKernel3/
           
-          # Find and append/copy dtb if available
+          # Find and copy dtb if available
           find source/out/arch/arm64/boot/dts/eebbk-qcom/ -name "*.dtb" -exec cp {} AnyKernel3/dtb \; || true
           
           cd AnyKernel3
