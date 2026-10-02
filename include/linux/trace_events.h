@@ -460,6 +460,8 @@ trace_trigger_soft_disabled(struct trace_event_file *file)
 	return false;
 }
 
+struct bpf_raw_event_map;
+
 #ifdef CONFIG_BPF_EVENTS
 unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx);
 int perf_event_attach_bpf_prog(struct perf_event *event, struct bpf_prog *prog);
