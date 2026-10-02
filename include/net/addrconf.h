@@ -223,10 +223,8 @@ struct ipv6_stub {
 				 const struct in6_addr *addr);
 	int (*ipv6_sock_mc_drop)(struct sock *sk, int ifindex,
 				 const struct in6_addr *addr);
-	struct dst_entry *(*ipv6_dst_lookup_flow)(struct net *net,
-						  const struct sock *sk,
-						  struct flowi6 *fl6,
-						  const struct in6_addr *final_dst);
+	int (*ipv6_dst_lookup)(struct net *net, struct sock *sk,
+			       struct dst_entry **dst, struct flowi6 *fl6);
 	void (*udpv6_encap_enable)(void);
 	void (*ndisc_send_na)(struct net_device *dev, const struct in6_addr *daddr,
 			      const struct in6_addr *solicited_addr,
@@ -234,6 +232,14 @@ struct ipv6_stub {
 	struct neigh_table *nd_tbl;
 };
 extern const struct ipv6_stub *ipv6_stub __read_mostly;
+
+/* A stub used by bpf helpers. Similarly ugly as ipv6_stub */
+struct ipv6_bpf_stub {
+	int (*inet6_bind)(struct sock *sk, struct sockaddr *uaddr, int addr_len,
+			  bool force_bind_address_no_port, bool with_lock);
+};
+extern const struct ipv6_bpf_stub *ipv6_bpf_stub __read_mostly;
+
 
 /*
  * identify MLD packets for MLD filter exceptions
