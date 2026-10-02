@@ -15,9 +15,10 @@ jobs:
       contents: write
 
     steps:
-      - name: Get branch name
-        id: branch-names
-        uses: tj-actions/branch-names@v8
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setting up SWAP
         uses: pierotofy/set-swap-space@master
@@ -33,37 +34,48 @@ jobs:
             libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev python3 \
             cmake libelf-dev libdw-dev device-tree-compiler swig
-          mkdir -p $GITHUB_WORKSPACE/workdir
-          cd $GITHUB_WORKSPACE/workdir
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: Get clang toolchain
-        run: |
-          git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b --depth 1 $GITHUB_WORKSPACE/workdir/clang
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-eebbk-s6-${{ github.sha }}
+          restore-keys: |
+            ccache-eebbk-s6-
 
-      - name: Get gcc toolchain
-        run: |
-          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/workdir/gcc
+      - name: Cache Clang r416183b
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains/clang-r416183b
+          key: clang-r416183b-toolchain
 
-      - name: Clone kernel source
+      - name: Setup Clang r416183b
+        if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
-          git clone --recursive https://github.com/$GITHUB_REPOSITORY/ -b ${{ steps.branch-names.outputs.current_branch }} --depth 1 $GITHUB_WORKSPACE/workdir/source
+          mkdir -p ~/toolchains
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b ~/toolchains/clang-r416183b
+
+      - name: Cache GCC 4.9 Toolchain
+        id: cache-gcc
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains/aarch64-linux-android-4.9
+          key: gcc-4.9-lineage-19.1-toolchain
+
+      - name: Setup GCC 4.9 Toolchain
+        if: steps.cache-gcc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchains
+          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 ~/toolchains/aarch64-linux-android-4.9
 
       - name: Sync and Adapt ReSukiSU
         run: |
-          cd $GITHUB_WORKSPACE/workdir/source
           if [ -f "scripts/sync_resukisu.sh" ]; then
             chmod +x scripts/sync_resukisu.sh
             ./scripts/sync_resukisu.sh
           fi
-
-      - name: Setting up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: build-kernel-eebbk-s6-${{ github.sha }}
-          restore-keys: |
-            build-kernel-eebbk-s6-
-          max-size: 5G
 
       - name: Build kernel
         run: |
@@ -73,24 +85,27 @@ jobs:
           export SUBARCH="arm64"
           export CROSS_COMPILE="aarch64-linux-android-"
           export CLANG_TRIPLE="aarch64-linux-gnu-"
-          export PATH="$GITHUB_WORKSPACE/workdir/clang/bin:$GITHUB_WORKSPACE/workdir/gcc/bin/:$PATH"
+          export PATH="$HOME/toolchains/clang-r416183b/bin:$HOME/toolchains/aarch64-linux-android-4.9/bin:$PATH"
           export TARGET_PRODUCT=sm6150
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          export CCACHE_MAXSIZE="5G"
+          ccache -s
 
-          cd $GITHUB_WORKSPACE/workdir/source
-          make -j$(nproc --all) O=out CC=clang LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
-          make -j$(nproc --all) O=out CC=clang DTC=dtc LD=ld.lld 2>&1 | tee kernel.log
+          make -j$(nproc --all) O=out CC="ccache clang" LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
+          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld 2>&1 | tee kernel.log
+
+          ccache -s
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: EEBBK_S6_${{ env.BUILD_TIME }}_kernel.log
-          path: workdir/source/kernel.log
+          path: kernel.log
 
       - name: Check kernel output
         run: |
-          cd $GITHUB_WORKSPACE/workdir
-          if [ -f source/out/arch/arm64/boot/Image.gz ]; then
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
               echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
           else
               echo "Kernel output file is empty"
@@ -100,12 +115,11 @@ jobs:
       - name: Package AnyKernel3 Flashable ZIP
         if: env.CHECK_FILE_IS_OK == 'true'
         run: |
-          cd $GITHUB_WORKSPACE/workdir
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp source/out/arch/arm64/boot/Image.gz AnyKernel3/
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
           
           # Find and copy dtb if available
-          find source/out/arch/arm64/boot/dts/eebbk-qcom/ -name "*.dtb" -exec cp {} AnyKernel3/dtb \; || true
+          find out/arch/arm64/boot/dts/eebbk-qcom/ -name "*.dtb" -exec cp {} AnyKernel3/dtb \; || true
           
           cd AnyKernel3
           sed -i 's/device\.name1=.*/device.name1=s6/' anykernel.sh
@@ -117,7 +131,7 @@ jobs:
           
           ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-${{ env.BUILD_TIME }}.zip"
           zip -r "../$ZIP_NAME" *
-          echo "ZIP_PATH=$GITHUB_WORKSPACE/workdir/$ZIP_NAME" >> $GITHUB_ENV
+          echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Upload AnyKernel3 Flashable ZIP
         if: env.CHECK_FILE_IS_OK == 'true'
@@ -131,11 +145,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Image-gz-4.14
-          path: workdir/source/out/arch/arm64/boot/Image.gz
+          path: out/arch/arm64/boot/Image.gz
 
       - name: Upload DTB files
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dtbs-4.14
-          path: workdir/source/out/arch/arm64/boot/dts/eebbk-qcom/sdmmagpie*
+          path: out/arch/arm64/boot/dts/eebbk-qcom/sdmmagpie*
