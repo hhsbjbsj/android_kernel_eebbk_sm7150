@@ -85,9 +85,6 @@
 #include <crypto/hash.h>
 #include <linux/scatterlist.h>
 
-//#ifdef OPLUS_FEATURE_NWPOWER
-#include <net/oplus_nwpower.h>
-//#endif /* OPLUS_FEATURE_NWPOWER */
 #ifdef CONFIG_TCP_MD5SIG
 static int tcp_v4_md5_hash_hdr(char *md5_hash, const struct tcp_md5sig_key *key,
 			       __be32 daddr, __be32 saddr, const struct tcphdr *th);
@@ -1012,9 +1009,18 @@ int tcp_md5_do_add(struct sock *sk, const union tcp_md5_addr *addr,
 
 	key = tcp_md5_do_lookup_exact(sk, addr, family, prefixlen);
 	if (key) {
-		/* Pre-existing entry - just update that one. */
+		/* Pre-existing entry - just update that one.
+		 * Note that the key might be used concurrently.
+		 */
 		memcpy(key->key, newkey, newkeylen);
-		key->keylen = newkeylen;
+
+		/* Pairs with READ_ONCE() in tcp_md5_hash_key().
+		 * Also note that a reader could catch new key->keylen value
+		 * but old key->key[], this is the reason we use __GFP_ZERO
+		 * at sock_kmalloc() time below these lines.
+		 */
+		WRITE_ONCE(key->keylen, newkeylen);
+
 		return 0;
 	}
 
@@ -1030,7 +1036,7 @@ int tcp_md5_do_add(struct sock *sk, const union tcp_md5_addr *addr,
 		rcu_assign_pointer(tp->md5sig_info, md5sig);
 	}
 
-	key = sock_kmalloc(sk, sizeof(*key), gfp);
+	key = sock_kmalloc(sk, sizeof(*key), gfp | __GFP_ZERO);
 	if (!key)
 		return -ENOMEM;
 	if (!tcp_alloc_md5sig_pool()) {
@@ -1642,9 +1648,6 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	struct sock *sk;
 	int ret;
 
-	//#ifdef OPLUS_FEATURE_NWPOWER
-	oplus_match_ipa_ip_wakeup(OPLUS_TCP_TYPE_V4, skb);
-	//#endif /* OPLUS_FEATURE_NWPOWER */
 	if (skb->pkt_type != PACKET_HOST)
 		goto discard_it;
 
@@ -1677,9 +1680,6 @@ lookup:
 	if (!sk)
 		goto no_tcp_socket;
 
-	//#ifdef OPLUS_FEATURE_NWPOWER
-	oplus_match_ipa_tcp_wakeup(OPLUS_TCP_TYPE_V4, sk);
-	//#endif /* OPLUS_FEATURE_NWPOWER */
 process:
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
@@ -1789,9 +1789,6 @@ bad_packet:
 	}
 
 discard_it:
-	//#ifdef OPLUS_FEATURE_NWPOWER
-	oplus_ipa_schedule_work();
-	//#endif /* OPLUS_FEATURE_NWPOWER */
 	/* Discard frame. */
 	kfree_skb(skb);
 	return 0;
@@ -2536,9 +2533,8 @@ static int __net_init tcp_sk_init(struct net *net)
 	net->ipv4.sysctl_tcp_sack = 1;
 	net->ipv4.sysctl_tcp_window_scaling = 1;
 	net->ipv4.sysctl_tcp_timestamps = 1;
-	#ifdef OPLUS_BUG_STABILITY
-	net->ipv4.sysctl_tcp_random_timestamp = 1;
-	#endif /* OPLUS_BUG_STABILITY */
+	net->ipv4.sysctl_tcp_default_init_rwnd = TCP_INIT_CWND * 2;
+
 	return 0;
 fail:
 	tcp_sk_exit(net);
