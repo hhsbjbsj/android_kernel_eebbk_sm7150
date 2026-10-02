@@ -36,17 +36,17 @@ jobs:
             cmake libelf-dev libdw-dev device-tree-compiler swig
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ccache
           key: ccache-eebbk-s6-${{ github.sha }}
           restore-keys: |
             ccache-eebbk-s6-
 
-      - name: Cache Clang r416183b
+      - name: Restore Clang r416183b
         id: cache-clang
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/toolchains/clang-r416183b
           key: clang-r416183b-toolchain
@@ -57,9 +57,16 @@ jobs:
           mkdir -p ~/toolchains
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b ~/toolchains/clang-r416183b
 
-      - name: Cache GCC 4.9 Toolchain
+      - name: Save Clang r416183b
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/toolchains/clang-r416183b
+          key: clang-r416183b-toolchain
+
+      - name: Restore GCC 4.9 Toolchain
         id: cache-gcc
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/toolchains/aarch64-linux-android-4.9
           key: gcc-4.9-lineage-19.1-toolchain
@@ -70,6 +77,13 @@ jobs:
           mkdir -p ~/toolchains
           git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 ~/toolchains/aarch64-linux-android-4.9
 
+      - name: Save GCC 4.9 Toolchain
+        if: steps.cache-gcc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/toolchains/aarch64-linux-android-4.9
+          key: gcc-4.9-lineage-19.1-toolchain
+
       - name: Sync and Adapt ReSukiSU
         run: |
           if [ -f "scripts/sync_resukisu.sh" ]; then
@@ -79,6 +93,8 @@ jobs:
 
       - name: Build kernel
         run: |
+          set -e
+          set -o pipefail
           export KBUILD_BUILD_HOST=Github-Action
           export KBUILD_BUILD_USER=ayin
           export ARCH="arm64"
@@ -92,9 +108,21 @@ jobs:
           ccache -s
 
           make -j$(nproc --all) O=out CC="ccache clang" LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
-          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld 2>&1 | tee kernel.log
+          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld Image.gz dtbs 2>&1 | tee kernel.log
+
+          if [ ! -f out/arch/arm64/boot/Image.gz ] && [ -f out/arch/arm64/boot/Image ]; then
+              echo "Compressing Image to Image.gz..."
+              gzip -c out/arch/arm64/boot/Image > out/arch/arm64/boot/Image.gz
+          fi
 
           ccache -s
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-eebbk-s6-${{ github.sha }}
 
       - name: Upload logs
         if: always()
@@ -118,8 +146,16 @@ jobs:
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
           
-          # Find and copy dtb if available
-          find out/arch/arm64/boot/dts/eebbk-qcom/ -name "*.dtb" -exec cp {} AnyKernel3/dtb \; || true
+          # Find and copy H130 dtb if available
+          H130_DTB=$(find out/arch/arm64/boot/dts/ -name "*h130*.dtb" | head -n 1)
+          if [ -n "$H130_DTB" ]; then
+              cp "$H130_DTB" AnyKernel3/dtb
+          else
+              ANY_DTB=$(find out/arch/arm64/boot/dts/ -name "*.dtb" | head -n 1)
+              [ -n "$ANY_DTB" ] && cp "$ANY_DTB" AnyKernel3/dtb || true
+          fi
+          # Also copy dtbo if generated
+          find out/arch/arm64/boot/dts/ -name "*h130*.dtbo" -exec cp {} AnyKernel3/dtbo.img \; || true
           
           cd AnyKernel3
           sed -i 's/device\.name1=.*/device.name1=s6/' anykernel.sh
@@ -152,4 +188,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dtbs-4.14
-          path: out/arch/arm64/boot/dts/eebbk-qcom/sdmmagpie*
+          path: |
+            out/arch/arm64/boot/dts/eebbk-qcom/*.dtb
+            out/arch/arm64/boot/dts/eebbk-qcom/*.dtbo
+            out/arch/arm64/boot/dts/qcom/*.dtb
