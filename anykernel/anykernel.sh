@@ -17,7 +17,13 @@ supported.patchlevels=
 '; } # end properties
 
 ### AnyKernel setup
-# shell variables
+# shell variables (AnyKernel3 requires UPPERCASE variable names)
+BLOCK=boot;
+IS_SLOT_DEVICE=auto;
+RAMDISK_COMPRESSION=auto;
+PATCH_VBMETA_FLAG=auto;
+
+# lowercase fallback aliases
 block=boot;
 is_slot_device=auto;
 ramdisk_compression=auto;
