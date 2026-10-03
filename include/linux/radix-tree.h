@@ -110,20 +110,32 @@ struct radix_tree_node {
 #define ROOT_TAG_SHIFT	(__GFP_BITS_SHIFT + 1)
 
 struct radix_tree_root {
+	spinlock_t		xa_lock;
 	gfp_t			gfp_mask;
 	struct radix_tree_node	__rcu *rnode;
 };
 
-#define RADIX_TREE_INIT(mask)	{					\
+#define _RADIX_TREE_INIT_1(mask)	{				\
+	.xa_lock = __SPIN_LOCK_UNLOCKED(xa_lock),			\
 	.gfp_mask = (mask),						\
 	.rnode = NULL,							\
 }
 
+#define _RADIX_TREE_INIT_2(name, mask)	{				\
+	.xa_lock = __SPIN_LOCK_UNLOCKED(name.xa_lock),			\
+	.gfp_mask = (mask),						\
+	.rnode = NULL,							\
+}
+
+#define _GET_RADIX_TREE_INIT(_1, _2, NAME, ...) NAME
+#define RADIX_TREE_INIT(...) _GET_RADIX_TREE_INIT(__VA_ARGS__, _RADIX_TREE_INIT_2, _RADIX_TREE_INIT_1)(__VA_ARGS__)
+
 #define RADIX_TREE(name, mask) \
-	struct radix_tree_root name = RADIX_TREE_INIT(mask)
+	struct radix_tree_root name = RADIX_TREE_INIT(name, mask)
 
 #define INIT_RADIX_TREE(root, mask)					\
 do {									\
+	spin_lock_init(&(root)->xa_lock);				\
 	(root)->gfp_mask = (mask);					\
 	(root)->rnode = NULL;						\
 } while (0)
