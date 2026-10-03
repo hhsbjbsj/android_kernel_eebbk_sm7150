@@ -108,3 +108,16 @@ static __maybe_unused inline void __init security_add_hooks_compat(struct securi
 #endif
 
 }
+
+static __maybe_unused inline bool selinux_initialized_compat(void)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+	return selinux_initialized();
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+	return selinux_is_initialized();
+#else
+	extern struct selinux_state selinux_state;
+	return selinux_state.initialized;
+#endif
+}
+
