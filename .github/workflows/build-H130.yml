@@ -154,34 +154,18 @@ jobs:
         if: env.CHECK_FILE_IS_OK == 'true'
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
+          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md AnyKernel3/LICENSE
 
-          # Strictly remove any dtb or dtbo from AnyKernel3 root to prevent bad partition flashing!
-          # AnyKernel3 will perform a clean boot-only replacement: extracting boot.img, replacing kernel,
-          # and preserving the authentic factory DTB and ramdisk without touching dtbo partition.
+          # Clean any existing sample scripts or dtb/dtbo
           rm -rf AnyKernel3/dtb AnyKernel3/dtb.img AnyKernel3/dtbo AnyKernel3/dtbo.img AnyKernel3/Image AnyKernel3/Image.gz* 2>/dev/null || true
 
+          # Copy our dedicated clean anykernel.sh (permissive SELinux, no ramdisk/init.rc tampering)
+          cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
+
+          # Copy the freshly built kernel Image.gz
           cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           
           cd AnyKernel3
-          sed -i 's/do\.devicecheck=.*/do.devicecheck=0/' anykernel.sh
-          sed -i 's/device\.name1=.*/device.name1=sm6150/' anykernel.sh
-          sed -i 's/device\.name2=.*/device.name2=sm7150/' anykernel.sh
-          sed -i 's/device\.name3=.*/device.name3=s6/' anykernel.sh
-          sed -i 's/device\.name4=.*/device.name4=H130/' anykernel.sh
-          sed -i 's/device\.name5=.*/device.name5=P20H130/' anykernel.sh
-          sed -i 's/BLOCK=.*/BLOCK=boot/' anykernel.sh
-          sed -i 's/IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=auto/' anykernel.sh
-          sed -i "s/kernel\.string=.*/kernel.string=EEBBK-S6-ReSukiSU-SUSFS-2.3.0/" anykernel.sh
-
-          # Explicitly disable dtbo and dtb flashing in anykernel.sh
-          sed -i \
-            -e 's/^flash_generic dtbo;/# flash_generic dtbo;/' \
-            -e 's/^flash_generic dtb;/# flash_generic dtb;/' \
-            -e 's/^flash_dtbo;/# flash_dtbo;/' \
-            -e 's/^flash_dtb;/# flash_dtb;/' \
-            anykernel.sh
-          
           ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-BootOnly-${{ env.BUILD_TIME }}.zip"
           zip -r "../$ZIP_NAME" *
           echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV

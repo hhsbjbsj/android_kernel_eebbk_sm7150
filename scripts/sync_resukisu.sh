@@ -140,6 +140,17 @@ if ksud_path.exists():
             ksud_path.write_text(ksud, encoding="utf-8")
             print("  - Updated ksud_integration.c: added /system/etc/init/init.rc support")
             break
+
+# 5. Comment out setenforce(true) to allow permissive mode
+init_path = Path("drivers/kernelsu/core/init.c")
+if init_path.exists():
+    init_c = init_path.read_text(encoding="utf-8")
+    old_enforce = 'if (!getenforce()) {\n            pr_info("Permissive SELinux, enforcing\\n");\n            setenforce(true);\n        }'
+    new_enforce = 'if (!getenforce()) {\n            pr_info("Permissive SELinux, keeping permissive\\n");\n            // setenforce(true);\n        }'
+    if old_enforce in init_c:
+        init_c = init_c.replace(old_enforce, new_enforce, 1)
+        init_path.write_text(init_c, encoding="utf-8")
+        print("  - Updated core/init.c: permissive mode preserved")
 PY
 
 echo "[PASS] ReSukiSU successfully synchronized and adapted for Linux 4.14 + SUSFS."

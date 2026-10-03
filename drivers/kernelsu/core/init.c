@@ -272,8 +272,8 @@ int __init kernelsu_init(void)
         track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
 
         if (!getenforce()) {
-            pr_info("Permissive SELinux, enforcing\n");
-            setenforce(true);
+            pr_info("Permissive SELinux, keeping permissive\n");
+            // setenforce(true);
         }
 #endif
     } else {
