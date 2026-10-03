@@ -158,9 +158,12 @@ jobs:
           find out/arch/arm64/boot/dts/ -name "*h130*.dtbo" -exec cp {} AnyKernel3/dtbo.img \; || true
           
           cd AnyKernel3
-          sed -i 's/device\.name1=.*/device.name1=s6/' anykernel.sh
-          sed -i 's/device\.name2=.*/device.name2=H130/' anykernel.sh
-          sed -i 's/device\.name3=.*/device.name3=P20H130/' anykernel.sh
+          sed -i 's/do\.devicecheck=.*/do.devicecheck=0/' anykernel.sh
+          sed -i 's/device\.name1=.*/device.name1=sm6150/' anykernel.sh
+          sed -i 's/device\.name2=.*/device.name2=sm7150/' anykernel.sh
+          sed -i 's/device\.name3=.*/device.name3=s6/' anykernel.sh
+          sed -i 's/device\.name4=.*/device.name4=H130/' anykernel.sh
+          sed -i 's/device\.name5=.*/device.name5=P20H130/' anykernel.sh
           sed -i 's/BLOCK=.*/BLOCK=boot/' anykernel.sh
           sed -i 's/IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=auto/' anykernel.sh
           sed -i "s/kernel\.string=.*/kernel.string=EEBBK-S6-ReSukiSU-SUSFS-2.3.0/" anykernel.sh
