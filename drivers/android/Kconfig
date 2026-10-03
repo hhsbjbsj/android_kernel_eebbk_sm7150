@@ -44,6 +44,13 @@ config ANDROID_BINDER_DEVICES
 	  created. Each binder device has its own context manager, and is
 	  therefore logically separated from the other devices.
 
+config REKERNEL
+	bool "Re:Kernel support"
+	depends on ANDROID_BINDER_IPC
+	default y
+	---help---
+	  Re:Kernel in-kernel acceleration and process management.
+
 config ANDROID_BINDER_IPC_SELFTEST
 	bool "Android Binder IPC Driver Selftest"
 	depends on ANDROID_BINDER_IPC

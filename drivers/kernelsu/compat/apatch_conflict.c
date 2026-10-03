@@ -146,6 +146,5 @@ static int detect_conflict_thread(void *data)
 
 void ksu_start_apatch_conflict_check()
 {
-    pr_info("KernelPatch KPM is disabled on built-in kernel\n");
-    kernel_patch_type = KERNEL_PATCH_NOT_FOUND;
+    kthread_run(detect_conflict_thread, NULL, "kthread_apatch_conflict_check");
 }

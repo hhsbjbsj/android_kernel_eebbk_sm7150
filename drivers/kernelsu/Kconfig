@@ -8,6 +8,13 @@ config KSU
 		Enable kernel-level root privileges on Android System.
 		Choose "m" here to build KernelSU as LKM
 
+config KPM
+    bool "Enable SukiSU KPM"
+    depends on KSU && 64BIT
+    default y
+    help
+      Enabling this option will activate the KPM feature of SukiSU.
+
 config KSU_DEBUG
 	  bool "KernelSU debug mode"
 	  depends on KSU

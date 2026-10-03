@@ -25,6 +25,7 @@
 #include <linux/rbtree.h>
 #include <linux/seq_file.h>
 #include <linux/vmalloc.h>
+#include <linux/rekernel.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/list_lru.h>
@@ -251,7 +252,6 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 
 		trace_binder_alloc_page_start(alloc, index);
 		page->page_ptr = alloc_page(GFP_KERNEL |
-					    __GFP_HIGHMEM |
 					    __GFP_ZERO);
 		if (!page->page_ptr) {
 			pr_err("%d: binder_alloc_buf failed for page at %pK\n",
@@ -277,7 +277,7 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 	}
 	if (mm) {
 		up_read(&mm->mmap_sem);
-		mmput(mm);
+		mmput_async(mm);
 	}
 	return 0;
 
@@ -310,7 +310,7 @@ err_page_ptr_cleared:
 err_no_vma:
 	if (mm) {
 		up_read(&mm->mmap_sem);
-		mmput(mm);
+		mmput_async(mm);
 	}
 	return vma ? -ENOMEM : -ESRCH;
 }
@@ -343,13 +343,68 @@ static inline struct vm_area_struct *binder_alloc_get_vma(
 	return vma;
 }
 
-static struct binder_buffer *binder_alloc_new_buf_locked(
+static inline bool line_is_frozen(struct task_struct *task)
+{
+	return frozen(task) || freezing(task);
+}
+
+static int send_netlink_message(const char *msg, uint16_t len) {
+    struct sk_buff *skbuffer;
+    struct nlmsghdr *nlhdr;
+
+    skbuffer = nlmsg_new(len, GFP_ATOMIC);
+    if (!skbuffer) {
+        printk("netlink alloc failure.\n");
+        return -1;
+    }
+
+    nlhdr = nlmsg_put(skbuffer, 0, 0, rekernel_netlink_unit, len, 0);
+    if (!nlhdr) {
+        printk("nlmsg_put failaure.\n");
+        nlmsg_free(skbuffer);
+        return -1;
+    }
+
+    memcpy(nlmsg_data(nlhdr), msg, len);
+    return netlink_unicast(rekernel_netlink, skbuffer, REKERNEL_USER_PORT, MSG_DONTWAIT);
+}
+
+static int __init start_rekernel_server(void)
+{
+	extern struct net init_net;
+	struct netlink_kernel_cfg rekernel_cfg = {
+		.input = NULL,
+	};
+
+	for (rekernel_netlink_unit = NETLINK_REKERNEL_MIN;
+	     rekernel_netlink_unit < NETLINK_REKERNEL_MAX;
+	     rekernel_netlink_unit++) {
+		rekernel_netlink = netlink_kernel_create(&init_net,
+							 rekernel_netlink_unit,
+							 &rekernel_cfg);
+		if (rekernel_netlink)
+			break;
+	}
+
+	if (!rekernel_netlink) {
+		pr_err("Re:Kernel: failed to create allocator netlink server\n");
+		return -EADDRINUSE;
+	}
+
+	pr_info("Re:Kernel: allocator netlink server created on unit %d\n",
+		rekernel_netlink_unit);
+	return 0;
+}
+late_initcall(start_rekernel_server);
+
+struct binder_buffer *binder_alloc_new_buf_locked(
 				struct binder_alloc *alloc,
 				size_t data_size,
 				size_t offsets_size,
 				size_t extra_buffers_size,
 				int is_async)
 {
+	struct task_struct *proc_task = NULL;
 	struct rb_node *n = alloc->free_buffers.rb_node;
 	struct binder_buffer *buffer;
 	size_t buffer_size;
@@ -381,6 +436,23 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 				alloc->pid, extra_buffers_size);
 		return ERR_PTR(-EINVAL);
 	}
+	if (is_async
+		&& (alloc->free_async_space < 3 * (size + sizeof(struct binder_buffer))
+		|| (alloc->free_async_space < REKERNEL_WARN_AHEAD_SPACE))) {
+		rcu_read_lock();
+		proc_task = find_task_by_vpid(alloc->pid);
+		rcu_read_unlock();
+		if (proc_task != NULL && rekernel_netlink) {
+			if (line_is_frozen(proc_task)) {
+     			char binder_kmsg[REKERNEL_PACKET_SIZE];
+                snprintf(binder_kmsg, sizeof(binder_kmsg), "type=Binder,bindertype=free_buffer_full,oneway=1,from_pid=%d,from=%d,target_pid=%d,target=%d;", current->pid, task_uid(current).val, proc_task->pid, task_uid(proc_task).val);
+         		send_netlink_message(binder_kmsg, strlen(binder_kmsg));
+			}
+		}
+	}
+	/* Pad 0-size buffers so they get assigned unique addresses */
+	size = max(size, sizeof(void *));
+
 	if (is_async &&
 	    alloc->free_async_space < size + sizeof(struct binder_buffer)) {
 		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
@@ -388,9 +460,6 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 			      alloc->pid, size);
 		return ERR_PTR(-ENOSPC);
 	}
-
-	/* Pad 0-size buffers so they get assigned unique addresses */
-	size = max(size, sizeof(void *));
 
 	while (n) {
 		buffer = rb_entry(n, struct binder_buffer, rb_node);
@@ -613,7 +682,7 @@ static void binder_free_buf_locked(struct binder_alloc *alloc,
 	BUG_ON(buffer->user_data > alloc->buffer + alloc->buffer_size);
 
 	if (buffer->async_transaction) {
-		alloc->free_async_space += size + sizeof(struct binder_buffer);
+		alloc->free_async_space += buffer_size + sizeof(struct binder_buffer);
 
 		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC_ASYNC,
 			     "%d: binder_free_buf size %zd async free %zd\n",
@@ -647,6 +716,8 @@ static void binder_free_buf_locked(struct binder_alloc *alloc,
 	binder_insert_free_buffer(alloc, buffer);
 }
 
+static void binder_alloc_clear_buf(struct binder_alloc *alloc,
+				   struct binder_buffer *buffer);
 /**
  * binder_alloc_free_buf() - free a binder buffer
  * @alloc:	binder_alloc for this proc
@@ -657,6 +728,18 @@ static void binder_free_buf_locked(struct binder_alloc *alloc,
 void binder_alloc_free_buf(struct binder_alloc *alloc,
 			    struct binder_buffer *buffer)
 {
+	/*
+	 * We could eliminate the call to binder_alloc_clear_buf()
+	 * from binder_alloc_deferred_release() by moving this to
+	 * binder_alloc_free_buf_locked(). However, that could
+	 * increase contention for the alloc mutex if clear_on_free
+	 * is used frequently for large buffers. The mutex is not
+	 * needed for correctness here.
+	 */
+	if (buffer->clear_on_free) {
+		binder_alloc_clear_buf(alloc, buffer);
+		buffer->clear_on_free = false;
+	}
 	mutex_lock(&alloc->mutex);
 	binder_free_buf_locked(alloc, buffer);
 	mutex_unlock(&alloc->mutex);
@@ -749,6 +832,10 @@ void binder_alloc_deferred_release(struct binder_alloc *alloc)
 		/* Transaction should already have been freed */
 		BUG_ON(buffer->transaction);
 
+		if (buffer->clear_on_free) {
+			binder_alloc_clear_buf(alloc, buffer);
+			buffer->clear_on_free = false;
+		}
 		binder_free_buf_locked(alloc, buffer);
 		buffers++;
 	}
@@ -1076,6 +1163,36 @@ static struct page *binder_alloc_get_page(struct binder_alloc *alloc,
 }
 
 /**
+ * binder_alloc_clear_buf() - zero out buffer
+ * @alloc: binder_alloc for this proc
+ * @buffer: binder buffer to be cleared
+ *
+ * memset the given buffer to 0
+ */
+static void binder_alloc_clear_buf(struct binder_alloc *alloc,
+				   struct binder_buffer *buffer)
+{
+	size_t bytes = binder_alloc_buffer_size(alloc, buffer);
+	binder_size_t buffer_offset = 0;
+
+	while (bytes) {
+		unsigned long size;
+		struct page *page;
+		pgoff_t pgoff;
+		void *kptr;
+
+		page = binder_alloc_get_page(alloc, buffer,
+					     buffer_offset, &pgoff);
+		size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
+		kptr = kmap(page) + pgoff;
+		memset(kptr, 0, size);
+		kunmap(page);
+		bytes -= size;
+		buffer_offset += size;
+	}
+}
+
+/**
  * binder_alloc_copy_user_to_buffer() - copy src user to tgt user
  * @alloc: binder_alloc for this proc
  * @buffer: binder buffer to be accessed
@@ -1176,4 +1293,8 @@ void binder_alloc_copy_from_buffer(struct binder_alloc *alloc,
 	binder_alloc_do_buffer_copy(alloc, false, buffer, buffer_offset,
 				    dest, bytes);
 }
-
+void binder_alloc_shrinker_exit(void)
+{
+	unregister_shrinker(&binder_shrinker);
+	list_lru_destroy(&binder_alloc_lru);
+}

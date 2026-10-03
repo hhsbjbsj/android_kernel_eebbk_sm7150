@@ -477,6 +477,12 @@ menuconfig TCP_CONG_ADVANCED
 
 if TCP_CONG_ADVANCED
 
+config TCP_CONG_BRUTAL
+	tristate "Brutal TCP congestion control"
+	default y
+	---help---
+	  TCP Brutal pacing-based congestion control for 4.14.
+
 config TCP_CONG_BIC
 	tristate "Binary Increase Congestion (BIC) control"
 	default m
