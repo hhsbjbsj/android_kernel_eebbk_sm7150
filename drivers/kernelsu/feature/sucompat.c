@@ -120,8 +120,20 @@ static void __user *userspace_stack_buffer(const void *d, size_t len)
 #endif
 
 static const char su_path[] = SU_PATH;
+static const char su_xbin_path[] = "/system/xbin/su";
 static const char sh_path[] = SH_PATH;
 static const char ksud_path[] = KSUD_PATH;
+
+static inline bool is_su_binary_path(const char *name)
+{
+    if (unlikely(!name))
+        return false;
+    if (!memcmp(name, su_path, sizeof(su_path)))
+        return true;
+    if (!memcmp(name, su_xbin_path, sizeof(su_xbin_path)))
+        return true;
+    return false;
+}
 
 static char __user *ksud_user_path(void)
 {
@@ -349,9 +361,7 @@ static inline int do_ksu_handle_execveat_sucompat(int *fd, const char *filename,
     bool is_allowed = ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid()));
 
 #ifdef KSU_COMPAT_USE_STATIC_KEY
-    // Yep, maybe someusers love turn off sucompat <- idk how they managed to keep using it
-    // But for mostly users, sucompat is enabled, so unlikely here
-    if (!static_branch_unlikely(&ksu_su_compat_enabled)) {
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
         return -EINVAL;
     }
 #else
@@ -363,7 +373,7 @@ static inline int do_ksu_handle_execveat_sucompat(int *fd, const char *filename,
     if (!is_allowed)
         return -EINVAL;
 
-    if (likely(memcmp(filename, su_path, sizeof(su_path))))
+    if (likely(!is_su_binary_path(filename)))
         return -EINVAL;
 
     pr_info("do_execveat_common su found\n");
@@ -523,24 +533,33 @@ int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, v
 #endif
 #endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) && defined(CONFIG_KSU_SUSFS)
+#ifdef CONFIG_KSU_SUSFS
 int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)
 {
     const struct cred *old_cred;
 
-    // we no need harden this check, susfs already complete in caller
-    // if (ksu_is_current_proc_unprivillege()) {
-    //     return 0;
-    // }
+#ifdef KSU_COMPAT_USE_STATIC_KEY
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
+        return 0;
+    }
+#else
+    if (!ksu_su_compat_enabled) {
+        return 0;
+    }
+#endif
 
-    if (!static_branch_unlikely(&ksu_su_compat_enabled)) {
+    if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid()))) {
+        return 0;
+    }
+
+    if (susfs_is_current_proc_no_su()) {
         return 0;
     }
 
     if (unlikely(IS_ERR(*filename) || (*filename)->name == NULL))
         return 0;
 
-    if (likely(memcmp((*filename)->name, su_path, sizeof(su_path))))
+    if (likely(!is_su_binary_path((*filename)->name)))
         return 0;
 
     old_cred = override_creds(ksu_cred);
@@ -548,7 +567,7 @@ int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *_
         pr_info("ksu_handle_faccessat su->sh!\n");
         memcpy((void *)((*filename)->name), sh_path, sizeof(sh_path));
     } else {
-        pr_info("no ksud found, don't process faccessat for su!");
+        pr_info("no ksud found, don't process faccessat for su!\n");
     }
 
     revert_creds(old_cred);
@@ -561,7 +580,7 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
         return 0;
     }
 
-    char path[sizeof(su_path) + 1] = { 0 };
+    char path[sizeof(su_xbin_path) + 1] = { 0 };
     const struct cred *old_cred;
 
 #ifndef CONFIG_KSU_TRACEPOINT_HOOK
@@ -571,7 +590,7 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 #endif
 
 #ifdef KSU_COMPAT_USE_STATIC_KEY
-    if (!static_branch_unlikely(&ksu_su_compat_enabled)) {
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
         return 0;
     }
 #else
@@ -585,13 +604,13 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 
     ksu_strncpy_from_user_nofault(path, *filename_user, sizeof(path));
 
-    if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
+    if (unlikely(is_su_binary_path(path))) {
         old_cred = override_creds(ksu_cred);
         if (is_ksud_exists()) {
             pr_info("ksu_handle_faccessat su->sh!\n");
             *filename_user = sh_user_path();
         } else {
-            pr_info("no ksud found, don't process faccessat for su!");
+            pr_info("no ksud found, don't process faccessat for su!\n");
         }
 
         revert_creds(old_cred);
@@ -601,28 +620,33 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 }
 #endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) && defined(CONFIG_KSU_SUSFS)
+#ifdef CONFIG_KSU_SUSFS
 int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)
 {
     const struct cred *old_cred;
 
-    // we no need harden this check, susfs already complete in caller
-    // if (ksu_is_current_proc_unprivillege()) {
-    //     return 0;
-    // }
-
-    if (!static_branch_unlikely(&ksu_su_compat_enabled)) {
+#ifdef KSU_COMPAT_USE_STATIC_KEY
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
         return 0;
     }
+#else
+    if (!ksu_su_compat_enabled) {
+        return 0;
+    }
+#endif
 
     if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid())))
         return 0;
+
+    if (susfs_is_current_proc_no_su()) {
+        return 0;
+    }
 
     if (unlikely(IS_ERR(*filename) || (*filename)->name == NULL)) {
         return 0;
     }
 
-    if (likely(memcmp((*filename)->name, su_path, sizeof(su_path)))) {
+    if (likely(!is_su_binary_path((*filename)->name))) {
         return 0;
     }
 
@@ -631,7 +655,7 @@ int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)
         pr_info("ksu_handle_stat: su->sh!\n");
         memcpy((void *)((*filename)->name), sh_path, sizeof(sh_path));
     } else {
-        pr_info("no ksud found, don't process stat for su!");
+        pr_info("no ksud found, don't process stat for su!\n");
     }
 
     revert_creds(old_cred);
@@ -645,7 +669,7 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
     }
 
     const struct cred *old_cred;
-    char path[sizeof(su_path) + 1] = { 0 };
+    char path[sizeof(su_xbin_path) + 1] = { 0 };
 
 #ifndef CONFIG_KSU_TRACEPOINT_HOOK
     if (ksu_is_current_proc_unprivillege()) {
@@ -654,9 +678,7 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 #endif
 
 #ifdef KSU_COMPAT_USE_STATIC_KEY
-    // Yep, maybe someusers love turn off sucompat <- idk how they managed to keep using it
-    // But for mostly users, sucompat is enabled, so unlikely here
-    if (!static_branch_unlikely(&ksu_su_compat_enabled)) {
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
         return 0;
     }
 #else
@@ -674,13 +696,13 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 
     ksu_strncpy_from_user_nofault(path, *filename_user, sizeof(path));
 
-    if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
+    if (unlikely(is_su_binary_path(path))) {
         old_cred = override_creds(ksu_cred);
         if (is_ksud_exists()) {
             pr_info("ksu_handle_stat su->sh!\n");
             *filename_user = sh_user_path();
         } else {
-            pr_info("no ksud found, don't process stat for su!");
+            pr_info("no ksud found, don't process stat for su!\n");
         }
 
         revert_creds(old_cred);

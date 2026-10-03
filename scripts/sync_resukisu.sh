@@ -86,44 +86,153 @@ from pathlib import Path
 h_path = Path("drivers/kernelsu/feature/sucompat.h")
 if h_path.exists():
     h = h_path.read_text(encoding="utf-8")
-    target_h = "#ifdef CONFIG_KSU_SUSFS\nint ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags);"
-    replace_h = "#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) && defined(CONFIG_KSU_SUSFS)\nint ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags);"
-    if target_h in h:
-        h = h.replace(target_h, replace_h, 1)
-        h_path.write_text(h, encoding="utf-8")
-        print("  - Updated sucompat.h: 4.14 user-pointer ABI guard installed")
+    if "int ksu_handle_post_execve(int *fd, const char *filename, void *argv, void *envp, int *flags, int *retval);" not in h.split("#else")[0]:
+        old_h = """#ifdef CONFIG_KSU_SUSFS
+int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags);
+int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);
+#else"""
+        new_h = """#ifdef CONFIG_KSU_SUSFS
+int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags);
+int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);
+int ksu_handle_post_execve(int *fd, const char *filename, void *argv, void *envp, int *flags, int *retval);
+#else"""
+        if old_h in h:
+            h = h.replace(old_h, new_h, 1)
+            h_path.write_text(h, encoding="utf-8")
+            print("  - Updated sucompat.h: exported ksu_handle_post_execve under CONFIG_KSU_SUSFS")
 
 # 2. sucompat.c
 c_path = Path("drivers/kernelsu/feature/sucompat.c")
 if c_path.exists():
     c = c_path.read_text(encoding="utf-8")
-    fa_target = "#ifdef CONFIG_KSU_SUSFS\nint ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)"
-    fa_replace = "#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) && defined(CONFIG_KSU_SUSFS)\nint ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)"
-    stat_target = "#ifdef CONFIG_KSU_SUSFS\nint ksu_handle_stat(int *dfd, struct filename **filename, int *flags)"
-    stat_replace = "#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) && defined(CONFIG_KSU_SUSFS)\nint ksu_handle_stat(int *dfd, struct filename **filename, int *flags)"
-    if fa_target in c:
-        c = c.replace(fa_target, fa_replace, 1)
-    if stat_target in c:
-        c = c.replace(stat_target, stat_replace, 1)
 
-    target_fa = 'int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *__unused_flags)'
-    idx_fa = c.find(target_fa)
-    if idx_fa != -1:
-        check = 'if (!ksu_is_allow_uid_for_current'
-        next_brace = c.find('{', idx_fa)
-        if check not in c[idx_fa:idx_fa+350]:
-            c = c[:next_brace+1] + '\n    if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid()))) {\n        return 0;\n    }\n' + c[next_brace+1:]
+    # Add su_xbin_path and is_su_binary_path helper
+    if "is_su_binary_path" not in c:
+        path_anchor = "static const char ksud_path[] = KSUD_PATH;\n"
+        path_helper = """static const char su_xbin_path[] = "/system/xbin/su";
 
-    target_st = 'int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)'
-    idx_st = c.find(target_st)
-    if idx_st != -1:
-        check = 'if (!ksu_is_allow_uid_for_current'
-        next_brace = c.find('{', idx_st)
-        if check not in c[idx_st:idx_st+350]:
-            c = c[:next_brace+1] + '\n    if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid()))) {\n        return 0;\n    }\n' + c[next_brace+1:]
+static inline bool is_su_binary_path(const char *name)
+{
+    if (unlikely(!name))
+        return false;
+    if (!memcmp(name, su_path, sizeof(su_path)))
+        return true;
+    if (!memcmp(name, su_xbin_path, sizeof(su_xbin_path)))
+        return true;
+    return false;
+}
+"""
+        c = c.replace(path_anchor, path_anchor + path_helper, 1)
+
+    # In do_ksu_handle_execveat_sucompat
+    c = c.replace(
+        "if (likely(memcmp(filename, su_path, sizeof(su_path))))",
+        "if (likely(!is_su_binary_path(filename)))"
+    )
+    c = c.replace(
+        "!static_branch_unlikely(&ksu_su_compat_enabled)",
+        "!static_branch_likely(&ksu_su_compat_enabled)"
+    )
+
+    # In ksu_handle_faccessat under CONFIG_KSU_SUSFS
+    fa_anchor = "int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)\n{"
+    if fa_anchor in c:
+        fa_body = """int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)
+{
+    const struct cred *old_cred;
+
+#ifdef KSU_COMPAT_USE_STATIC_KEY
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
+        return 0;
+    }
+#else
+    if (!ksu_su_compat_enabled) {
+        return 0;
+    }
+#endif
+
+    if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid()))) {
+        return 0;
+    }
+
+    if (susfs_is_current_proc_no_su()) {
+        return 0;
+    }
+
+    if (unlikely(IS_ERR(*filename) || (*filename)->name == NULL))
+        return 0;
+
+    if (likely(!is_su_binary_path((*filename)->name)))
+        return 0;
+
+    old_cred = override_creds(ksu_cred);
+    if (is_ksud_exists()) {
+        pr_info("ksu_handle_faccessat su->sh!\\n");
+        memcpy((void *)((*filename)->name), sh_path, sizeof(sh_path));
+    } else {
+        pr_info("no ksud found, don't process faccessat for su!\\n");
+    }
+
+    revert_creds(old_cred);
+    return 0;
+}"""
+        fa_end = c.find("int ksu_handle_faccessat(int *dfd, const char __user **filename_user")
+        if fa_end != -1:
+            fa_prev = c[:c.find(fa_anchor)]
+            fa_next = c[fa_end:]
+            c = fa_prev + fa_body + "\n#else\n" + fa_next
+
+    # In ksu_handle_stat under CONFIG_KSU_SUSFS
+    stat_anchor = "int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)\n{"
+    if stat_anchor in c:
+        stat_body = """int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)
+{
+    const struct cred *old_cred;
+
+#ifdef KSU_COMPAT_USE_STATIC_KEY
+    if (!static_branch_likely(&ksu_su_compat_enabled)) {
+        return 0;
+    }
+#else
+    if (!ksu_su_compat_enabled) {
+        return 0;
+    }
+#endif
+
+    if (!ksu_is_allow_uid_for_current(ksu_get_uid_t(current_uid())))
+        return 0;
+
+    if (susfs_is_current_proc_no_su()) {
+        return 0;
+    }
+
+    if (unlikely(IS_ERR(*filename) || (*filename)->name == NULL)) {
+        return 0;
+    }
+
+    if (likely(!is_su_binary_path((*filename)->name))) {
+        return 0;
+    }
+
+    old_cred = override_creds(ksu_cred);
+    if (is_ksud_exists()) {
+        pr_info("ksu_handle_stat: su->sh!\\n");
+        memcpy((void *)((*filename)->name), sh_path, sizeof(sh_path));
+    } else {
+        pr_info("no ksud found, don't process stat for su!\\n");
+    }
+
+    revert_creds(old_cred);
+    return 0;
+}"""
+        stat_end = c.find("int ksu_handle_stat(int *dfd, const char __user **filename_user")
+        if stat_end != -1:
+            stat_prev = c[:c.find(stat_anchor)]
+            stat_next = c[stat_end:]
+            c = stat_prev + stat_body + "\n#else\n" + stat_next
 
     c_path.write_text(c, encoding="utf-8")
-    print("  - Updated sucompat.c: 4.14 user-pointer ABI & authorized UID filter installed")
+    print("  - Updated sucompat.c: 4.14 SUSFS struct filename ABI & authorized UID filter installed")
 
 # 3. KPM 4.14 access_ok and pointer compatibility
 kpm_path = Path("drivers/kernelsu/kpm/kpm.c")
