@@ -206,25 +206,6 @@ struct ksu_get_kernel_patch_implement {
     __u8 type; // Output: Current Kernel Patch Implement
 };
 
-struct ksu_enable_kpm_cmd {
-    __u8 enabled; // Output: true if KPM is enabled
-};
-
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_LOAD, 1)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_UNLOAD, 2)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_NUM, 3)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_LIST, 4)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_INFO, 5)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_CONTROL, 6)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_VERSION, 7)
-
-struct ksu_kpm_cmd {
-    __aligned_u64 __user control_code;
-    __aligned_u64 __user arg1;
-    __aligned_u64 __user arg2;
-    __aligned_u64 __user result_code;
-};
-
 /* IOCTL command definitions */
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_GRANT_ROOT, _IOC(_IOC_NONE, 'K', 1, 0))
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_GET_INFO, _IOR('K', 2, struct ksu_get_info_cmd))
@@ -257,11 +238,11 @@ DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT, _IO('K', 21))
 // Downstream add IOCTL command definitions
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_GET_FULL_VERSION, _IOC(_IOC_READ, 'K', 100, 0))
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_HOOK_TYPE, _IOC(_IOC_READ, 'K', 101, 0))
-DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_ENABLE_KPM, _IOC(_IOC_READ, 'K', 102, 0))
+// 102 = ENABLE_KPM (KernelPatch Module),deprecated
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_DYNAMIC_MANAGER, _IOC(_IOC_READ | _IOC_WRITE, 'K', 103, 0))
 // 104 = old get_managers, deprecated
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_GET_MANAGERS, _IOC(_IOC_READ | _IOC_WRITE, 'K', 105, 0))
 DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_GET_KERNEL_PATCH_IMPLEMENT, _IOC(_IOC_READ, 'K', 106, 0))
-DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_KPM, _IOC(_IOC_READ | _IOC_WRITE, 'K', 200, 0))
+// 200 = MANAGE_KPM,deprecated
 #undef DEFINE_KSU_UAPI_CONST
 #endif

@@ -12,13 +12,7 @@ echo "=========================================================="
 RESUKISU_REPO="https://github.com/ReSukiSU/ReSukiSU.git"
 UPSTREAM_DIR="${KERNELSU_UPSTREAM_DIR:-/tmp/ReSukiSU-upstream}"
 DEST_DIR="$KERNEL_DIR/drivers/kernelsu"
-KPM_BACKUP="/tmp/kpm_backup"
 
-# Backup existing KPM files if present
-if [ -d "$DEST_DIR/kpm" ]; then
-    rm -rf "$KPM_BACKUP"
-    cp -r "$DEST_DIR/kpm" "$KPM_BACKUP"
-fi
 
 # 1. Fetch / Clone ReSukiSU main with tags and commit history
 if [ -d "$UPSTREAM_DIR/.git" ]; then
@@ -55,11 +49,7 @@ rm -rf "$DEST_DIR/include/uapi"
 mkdir -p "$DEST_DIR/include/uapi"
 cp -r "$UPSTREAM_DIR/uapi/"* "$DEST_DIR/include/uapi/"
 
-# Restore KPM files if backup exists
-if [ -d "$KPM_BACKUP" ]; then
-    echo "[+] Restoring KPM subsystem into drivers/kernelsu/kpm..."
-    cp -r "$KPM_BACKUP" "$DEST_DIR/kpm"
-fi
+
 
 # 4. Patch Makefile
 echo 'include $(srctree)/$(src)/Kbuild' > "$DEST_DIR/Makefile"
@@ -77,8 +67,8 @@ sed -i "s/KSU_BRANCH_NAME\s*:=.*/KSU_BRANCH_NAME := main/g" "$DEST_DIR/Kbuild"
 echo "[+] Enabling allow_shell = true in core/init.c..."
 sed -i 's/bool allow_shell = false;/bool allow_shell = true;/g' "$DEST_DIR/core/init.c"
 
-# 7. Adapt Linux 4.14 user-pointer ABI, hide su for unauthorized UIDs, and wire KPM
-echo "[+] Adapting sucompat and wiring KPM for Linux 4.14 + SUSFS..."
+# 7. Adapt Linux 4.14 user-pointer ABI and hide su for unauthorized UIDs
+echo "[+] Adapting sucompat and apatch for Linux 4.14 + SUSFS..."
 python3 -u - <<'PY'
 from pathlib import Path
 
@@ -234,190 +224,21 @@ static inline bool is_su_binary_path(const char *name)
     c_path.write_text(c, encoding="utf-8")
     print("  - Updated sucompat.c: 4.14 SUSFS struct filename ABI & authorized UID filter installed")
 
-# 3. KPM 4.14 access_ok and pointer compatibility
-kpm_path = Path("drivers/kernelsu/kpm/kpm.c")
-if kpm_path.exists():
-    ks = kpm_path.read_text(encoding="utf-8")
-    anchor = "#define KPM_NAME_LEN 32\n"
-    helper = """/* Linux 4.14 KPM userspace-pointer compatibility. */
-static inline bool kpm_access_ok_read(unsigned long addr,
-                                      unsigned long size)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
-    return access_ok(VERIFY_READ, (void __user *)addr, size);
-#else
-    return access_ok((void __user *)addr, size);
-#endif
-}
+# 3. Disable KPM conflict check to prevent kernel crash when clicking KPM in Manager
+ap_path = Path("drivers/kernelsu/compat/apatch_conflict.c")
+if ap_path.exists():
+    ap = ap_path.read_text(encoding="utf-8")
+    target_start = "ksu_start_apatch_conflict_check"
+    idx = ap.find(target_start)
+    if idx != -1:
+        next_brace = ap.find("{", idx)
+        close_brace = ap.find("}", next_brace)
+        if next_brace != -1 and close_brace != -1:
+            ap = ap[:next_brace+1] + '\n    pr_info("KernelPatch KPM is disabled on built-in kernel\\n");\n    kernel_patch_type = KERNEL_PATCH_NOT_FOUND;\n' + ap[close_brace:]
+            ap_path.write_text(ap, encoding="utf-8")
+            print("  - Updated apatch_conflict.c: KPM disabled safely")
 
-static inline bool kpm_access_ok_write(unsigned long addr,
-                                       unsigned long size)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
-    return access_ok(VERIFY_WRITE, (void __user *)addr, size);
-#else
-    return access_ok((void __user *)addr, size);
-#endif
-}
-
-"""
-    if "kpm_access_ok_read" not in ks:
-        ks = ks.replace("access_ok(", "kpm_access_ok_read(")
-        ks = ks.replace(anchor, helper + anchor, 1)
-
-    ks = ks.replace("if (!kpm_access_ok_read(arg2, len)) {", "if (!kpm_access_ok_write(arg1, len)) {")
-    ks = ks.replace("if (!kpm_access_ok_read(arg2, size)) {", "if (!kpm_access_ok_write(arg2, size)) {")
-    version_anchor = """        unsigned int outlen = (unsigned int)arg2;
-        int len = strlen(buffer);"""
-    version_repl = """        unsigned int outlen = (unsigned int)arg2;
-        if (outlen == 0 || !kpm_access_ok_write(arg1, outlen)) {
-            goto invalid_arg;
-        }
-        int len = strlen(buffer);"""
-    if version_anchor in ks:
-        ks = ks.replace(version_anchor, version_repl, 1)
-
-    ks = ks.replace('char kernel_load_path[256];', 'char kernel_load_path[256] = { 0 };')
-    ks = ks.replace('char kernel_args_buffer[256];', 'char kernel_args_buffer[256] = { 0 };')
-    ks = ks.replace('char kernel_name_buffer[256];', 'char kernel_name_buffer[256] = { 0 };')
-    ks = ks.replace('char buf[256];', 'char buf[256] = { 0 };')
-    ks = ks.replace('char buf[1024];', 'char buf[1024] = { 0 };')
-    ks = ks.replace('int size;\n', 'int size = 0;\n', 1)
-    ks = ks.replace(
-        'exit:\n    if (copy_to_user(result_code, &res, sizeof(res)) != 0)',
-        'exit:\n    if (!kpm_access_ok_write(result_code, sizeof(res)) || copy_to_user((void __user *)result_code, &res, sizeof(res)) != 0)'
-    )
-    kpm_path.write_text(ks, encoding="utf-8")
-    print("  - Updated kpm.c: 4.14 access_ok and pointer transfer fixes applied")
-
-sa_path = Path("drivers/kernelsu/kpm/super_access.c")
-if sa_path.exists():
-    sa = sa_path.read_text(encoding="utf-8")
-    sa = sa.replace('#include <../fs/mount.h>', '#include "../../fs/mount.h"')
-    sa = sa.replace('*out_offset = info->members[i].offset;', '*out_offset = info->members[i1].offset;')
-    sa = sa.replace('*out_size = info->members[i].size;', '*out_size = info->members[i1].size;')
-    sa_path.write_text(sa, encoding="utf-8")
-    print("  - Updated super_access.c: mount.h header and loop indexing fixed")
-
-# 4. Kbuild: Add KPM objects
-kb_path = Path("drivers/kernelsu/Kbuild")
-if kb_path.exists():
-    kb = kb_path.read_text(encoding="utf-8")
-    if "kpm/kpm.o" not in kb:
-        addition = "\nifdef CONFIG_KPM\nkernelsu-objs += kpm/kpm.o\nkernelsu-objs += kpm/compact.o\nkernelsu-objs += kpm/super_access.o\nendif\n"
-        anchor = "kernelsu-objs += compat/apatch_conflict.o\nendif\n"
-        if anchor in kb:
-            kb = kb.replace(anchor, anchor + addition, 1)
-        else:
-            kb = kb + addition
-        kb_path.write_text(kb, encoding="utf-8")
-        print("  - Updated Kbuild: KPM objects registered")
-
-# 5. Kconfig: Add CONFIG_KPM
-kc_path = Path("drivers/kernelsu/Kconfig")
-if kc_path.exists():
-    kc = kc_path.read_text(encoding="utf-8")
-    if "config KPM" not in kc:
-        block = """config KPM
-    bool "Enable SukiSU KPM"
-    depends on KSU && 64BIT
-    default y
-    help
-      Enabling this option will activate the KPM feature of SukiSU.
-
-"""
-        kc = kc.replace("config KSU_DEBUG", block + "config KSU_DEBUG", 1)
-        kc_path.write_text(kc, encoding="utf-8")
-        print("  - Updated Kconfig: config KPM added")
-
-# 6. supercall.h: Add KPM commands and ioctls
-sc_path = Path("drivers/kernelsu/include/uapi/supercall.h")
-if sc_path.exists():
-    sc = sc_path.read_text(encoding="utf-8")
-    if "KSU_IOCTL_ENABLE_KPM" not in sc:
-        cmd_defs = """struct ksu_enable_kpm_cmd {
-    __u8 enabled; // Output: true if KPM is enabled
-};
-
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_LOAD, 1)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_UNLOAD, 2)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_NUM, 3)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_LIST, 4)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_INFO, 5)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_CONTROL, 6)
-DEFINE_KSU_UAPI_CONST(__u32, SUKISU_KPM_VERSION, 7)
-
-struct ksu_kpm_cmd {
-    __aligned_u64 __user control_code;
-    __aligned_u64 __user arg1;
-    __aligned_u64 __user arg2;
-    __aligned_u64 __user result_code;
-};
-
-"""
-        sc = sc.replace("/* IOCTL command definitions */", cmd_defs + "/* IOCTL command definitions */", 1)
-        sc = sc.replace(
-            "// 102 = ENABLE_KPM (KernelPatch Module),deprecated",
-            "DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_ENABLE_KPM, _IOC(_IOC_READ, 'K', 102, 0))"
-        )
-        sc = sc.replace(
-            "// 200 = MANAGE_KPM,deprecated",
-            "DEFINE_KSU_UAPI_CONST(__u32, KSU_IOCTL_KPM, _IOC(_IOC_READ | _IOC_WRITE, 'K', 200, 0))"
-        )
-        sc_path.write_text(sc, encoding="utf-8")
-        print("  - Updated supercall.h: KPM structs and IOCTLs enabled")
-
-# 7. supercall/dispatch.c: Add do_enable_kpm and do_kpm
-dp_path = Path("drivers/kernelsu/supercall/dispatch.c")
-if dp_path.exists():
-    dp = dp_path.read_text(encoding="utf-8")
-    if "do_enable_kpm" not in dp:
-        handler_funcs = """#ifdef CONFIG_KPM
-#include "kpm/kpm.h"
-
-static int do_enable_kpm(void __user *arg)
-{
-    struct ksu_enable_kpm_cmd cmd;
-
-    cmd.enabled = IS_ENABLED(CONFIG_KPM);
-
-    if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-        pr_err("enable_kpm: copy_to_user failed\\n");
-        return -EFAULT;
-    }
-
-    return 0;
-}
-#endif
-"""
-        anchor_dp = "static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {"
-        dp = dp.replace(anchor_dp, handler_funcs + "\n" + anchor_dp, 1)
-
-        table_entries = """#ifdef CONFIG_KPM
-    { 
-        .cmd = KSU_IOCTL_ENABLE_KPM,
-        .name = "GET_ENABLE_KPM",
-        .handler = do_enable_kpm,
-        .perm_check = manager_or_root
-    },
-    { 
-        .cmd = KSU_IOCTL_KPM,
-        .name = "KPM_OPERATION",
-        .handler = do_kpm,
-        .perm_check = manager_or_root
-    },
-#endif
-"""
-        sentinel = "    { \n        .cmd = 0, \n        .name = NULL,"
-        if sentinel in dp:
-            dp = dp.replace(sentinel, table_entries + sentinel, 1)
-        else:
-            sentinel2 = "    {\n        .cmd = 0,"
-            dp = dp.replace(sentinel2, table_entries + sentinel2, 1)
-        dp_path.write_text(dp, encoding="utf-8")
-        print("  - Updated dispatch.c: KPM handlers wired into ioctl table")
-
-# 8. Support additional init.rc paths
+# 4. Support additional init.rc paths
 ksud_path = Path("drivers/kernelsu/runtime/ksud_integration.c")
 if ksud_path.exists():
     ksud = ksud_path.read_text(encoding="utf-8")
@@ -432,7 +253,7 @@ if ksud_path.exists():
             print("  - Updated ksud_integration.c: added /system/etc/init/init.rc support")
             break
 
-# 9. Comment out setenforce(true) to allow permissive mode
+# 5. Comment out setenforce(true) to allow permissive mode
 init_path = Path("drivers/kernelsu/core/init.c")
 if init_path.exists():
     init_c = init_path.read_text(encoding="utf-8")
@@ -444,4 +265,4 @@ if init_path.exists():
         print("  - Updated core/init.c: permissive mode preserved")
 PY
 
-echo "[PASS] ReSukiSU successfully synchronized and adapted for Linux 4.14 + SUSFS + KPM."
+echo "[PASS] ReSukiSU successfully synchronized and adapted for Linux 4.14 + SUSFS."

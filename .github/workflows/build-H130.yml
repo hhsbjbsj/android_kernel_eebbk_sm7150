@@ -109,6 +109,7 @@ jobs:
 
           make -j$(nproc --all) O=out CC="ccache clang" LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
           make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld Image dtbs 2>&1 | tee kernel.log
+          gzip -c -9 out/arch/arm64/boot/Image > out/arch/arm64/boot/Image.gz
 
           ccache -s
 
@@ -125,66 +126,6 @@ jobs:
         with:
           name: EEBBK_S6_${{ env.BUILD_TIME }}_kernel.log
           path: kernel.log
-
-      - name: Inject KernelPatch (KPM) into Image and Compress
-        run: |
-          set -e
-          IMAGE="out/arch/arm64/boot/Image"
-          if [ ! -f "$IMAGE" ]; then
-              echo "Error: $IMAGE not found"
-              exit 1
-          fi
-
-          PATCH_REPO="$HOME/SukiSU_patch"
-          PATCH_DIR="$HOME/run-kpm-patch"
-          rm -rf "$PATCH_REPO" "$PATCH_DIR"
-          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU_patch.git "$PATCH_REPO"
-          mkdir -p "$PATCH_DIR"
-          cp -a "$PATCH_REPO/kpm/." "$PATCH_DIR/"
-          cp -f "$IMAGE" "$PATCH_DIR/Image"
-          chmod +x "$PATCH_DIR/patch_linux" "$PATCH_DIR/kptools" || true
-
-          # 1. Verify pre-patch ARM64 Image magic
-          python3 - "$PATCH_DIR/Image" <<'PY'
-          from pathlib import Path
-          import sys
-          p = Path(sys.argv[1])
-          d = p.read_bytes()[:64]
-          if len(d) < 64 or d[56:60] != b'ARM\x64':
-              raise SystemExit('pre-patch Image lost ARM64 Image magic')
-          print('pre-patch ARM64 Image magic: PASS')
-          PY
-
-          BEFORE_SHA="$(sha256sum "$PATCH_DIR/Image" | awk '{print $1}')"
-          (
-            cd "$PATCH_DIR"
-            ./patch_linux
-          )
-          test -s "$PATCH_DIR/oImage"
-
-          # 2. Verify post-patch ARM64 Image magic
-          python3 - "$PATCH_DIR/oImage" <<'PY'
-          from pathlib import Path
-          import sys
-          p = Path(sys.argv[1])
-          d = p.read_bytes()[:64]
-          if len(d) < 64 or d[56:60] != b'ARM\x64':
-              raise SystemExit('patched oImage lost ARM64 Image magic')
-          print('patched ARM64 Image magic: PASS')
-          PY
-
-          AFTER_SHA="$(sha256sum "$PATCH_DIR/oImage" | awk '{print $1}')"
-          echo "Before patch SHA: $BEFORE_SHA"
-          echo "After patch SHA:  $AFTER_SHA"
-          if [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
-              echo "Error: Image was not modified by patch_linux!"
-              exit 1
-          fi
-
-          # Replace Image with patched oImage and compress to Image.gz
-          cp -f "$PATCH_DIR/oImage" "$IMAGE"
-          gzip -c -9 "$IMAGE" > out/arch/arm64/boot/Image.gz
-          echo "[PASS] Successfully injected KernelPatch into Image and recompressed Image.gz"
 
       - name: Check kernel output
         run: |
@@ -221,7 +162,7 @@ jobs:
           cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           
           cd AnyKernel3
-          ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-KPM-BootOnly-${{ env.BUILD_TIME }}.zip"
+          ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-BootOnly-${{ env.BUILD_TIME }}.zip"
           zip -r "../$ZIP_NAME" *
           echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV
 
