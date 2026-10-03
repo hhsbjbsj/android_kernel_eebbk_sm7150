@@ -38,6 +38,9 @@ __printf(3, 4) void _erofs_info(struct super_block *sb,
 #endif	/* !CONFIG_EROFS_FS_DEBUG */
 
 /* EROFS_SUPER_MAGIC_V1 to represent the whole file system */
+#ifndef EROFS_SUPER_MAGIC_V1
+#define EROFS_SUPER_MAGIC_V1	0xE0F5E1E2
+#endif
 #define EROFS_SUPER_MAGIC   EROFS_SUPER_MAGIC_V1
 
 typedef u64 erofs_nid_t;
