@@ -140,22 +140,28 @@ jobs:
               exit 1
           fi
 
+      - name: Build Android DTBO Image
+        if: env.CHECK_FILE_IS_OK == 'true'
+        run: |
+          mkdir -p out/artifacts
+          H130_DTBOS=$(find out/arch/arm64/boot/dts/ -name "*h130*.dtbo")
+          if [ -n "$H130_DTBOS" ]; then
+              python3 scripts/dtc/libfdt/mkdtboimg.py create out/artifacts/dtbo.img --page_size=4096 $H130_DTBOS
+              echo "Created out/artifacts/dtbo.img"
+          fi
+
       - name: Package AnyKernel3 Flashable ZIP
         if: env.CHECK_FILE_IS_OK == 'true'
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/
-          
-          # Find and copy H130 dtb if available
-          H130_DTB=$(find out/arch/arm64/boot/dts/ -name "*h130*.dtb" | head -n 1)
-          if [ -n "$H130_DTB" ]; then
-              cp "$H130_DTB" AnyKernel3/dtb
-          else
-              ANY_DTB=$(find out/arch/arm64/boot/dts/ -name "*.dtb" | head -n 1)
-              [ -n "$ANY_DTB" ] && cp "$ANY_DTB" AnyKernel3/dtb || true
-          fi
-          # Also copy dtbo if generated
-          find out/arch/arm64/boot/dts/ -name "*h130*.dtbo" -exec cp {} AnyKernel3/dtbo.img \; || true
+          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
+
+          # Strictly remove any dtb or dtbo from AnyKernel3 root to prevent bad partition flashing!
+          # AnyKernel3 will perform a clean boot-only replacement: extracting boot.img, replacing kernel,
+          # and preserving the authentic factory DTB and ramdisk without touching dtbo partition.
+          rm -rf AnyKernel3/dtb AnyKernel3/dtb.img AnyKernel3/dtbo AnyKernel3/dtbo.img AnyKernel3/Image AnyKernel3/Image.gz* 2>/dev/null || true
+
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           
           cd AnyKernel3
           sed -i 's/do\.devicecheck=.*/do.devicecheck=0/' anykernel.sh
@@ -167,8 +173,16 @@ jobs:
           sed -i 's/BLOCK=.*/BLOCK=boot/' anykernel.sh
           sed -i 's/IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=auto/' anykernel.sh
           sed -i "s/kernel\.string=.*/kernel.string=EEBBK-S6-ReSukiSU-SUSFS-2.3.0/" anykernel.sh
+
+          # Explicitly disable dtbo and dtb flashing in anykernel.sh
+          sed -i \
+            -e 's/^flash_generic dtbo;/# flash_generic dtbo;/' \
+            -e 's/^flash_generic dtb;/# flash_generic dtb;/' \
+            -e 's/^flash_dtbo;/# flash_dtbo;/' \
+            -e 's/^flash_dtb;/# flash_dtb;/' \
+            anykernel.sh
           
-          ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-${{ env.BUILD_TIME }}.zip"
+          ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-BootOnly-${{ env.BUILD_TIME }}.zip"
           zip -r "../$ZIP_NAME" *
           echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV
 
@@ -195,3 +209,10 @@ jobs:
             out/arch/arm64/boot/dts/eebbk-qcom/*.dtb
             out/arch/arm64/boot/dts/eebbk-qcom/*.dtbo
             out/arch/arm64/boot/dts/qcom/*.dtb
+
+      - name: Upload DTBO Image
+        if: env.CHECK_FILE_IS_OK == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtbo-img-4.14
+          path: out/artifacts/dtbo.img
