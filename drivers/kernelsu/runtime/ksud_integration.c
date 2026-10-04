@@ -56,11 +56,6 @@ static const char KERNEL_SU_RC[] =
     "	exec u:r:" KERNEL_SU_DOMAIN ":s0 root -- " KSUD_PATH " post-fs-data\n"
     "\n"
 
-    "on boot\n"
-    "	setprop persist.sys.usb.config adb\n"
-    "	setprop sys.usb.config adb\n"
-    "\n"
-
     "on nonencrypted\n"
     "	exec u:r:" KERNEL_SU_DOMAIN ":s0 root -- " KSUD_PATH " services\n"
     "\n"

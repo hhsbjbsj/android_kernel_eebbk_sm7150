@@ -264,15 +264,6 @@ if init_path.exists():
         init_path.write_text(init_c, encoding="utf-8")
         print("  - Updated core/init.c: permissive mode preserved")
 
-# 6. Force start unauthenticated ADB in KERNEL_SU_RC
-if ksud_path.exists():
-    ksud = ksud_path.read_text(encoding="utf-8")
-    old_nonenc = '"on nonencrypted\\n"'
-    new_boot = '"on boot\\n"\n    "\\tsetprop persist.sys.usb.config adb\\n"\n    "\\tsetprop sys.usb.config adb\\n"\n\\n    "on nonencrypted\\n"'
-    if old_nonenc in ksud and "setprop sys.usb.config adb" not in ksud:
-        ksud = ksud.replace(old_nonenc, new_boot, 1)
-        ksud_path.write_text(ksud, encoding="utf-8")
-        print("  - Updated ksud_integration.c: added early ADB trigger to KERNEL_SU_RC on boot")
 PY
 
 echo "[PASS] ReSukiSU successfully synchronized and adapted for Linux 4.14 + SUSFS."
