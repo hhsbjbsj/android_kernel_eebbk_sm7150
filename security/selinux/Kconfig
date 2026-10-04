@@ -71,6 +71,17 @@ config SECURITY_SELINUX_DEVELOP
 	  can interactively toggle the kernel between enforcing mode and
 	  permissive mode (if permitted by the policy) via /selinux/enforce.
 
+config ALWAYS_PERMISSIVE
+	bool "Always enforce SELinux Permissive mode"
+	depends on SECURITY_SELINUX
+	default y
+	help
+	  When enabled, SELinux will always stay in Permissive mode.
+	  Any attempt by userspace (e.g. init) to switch SELinux to
+	  Enforcing mode via /sys/fs/selinux/enforce will be ignored,
+	  ensuring maximum compatibility for ported ROMs and system
+	  bring-up.
+
 config SECURITY_SELINUX_AVC_STATS
 	bool "NSA SELinux AVC Statistics"
 	depends on SECURITY_SELINUX
