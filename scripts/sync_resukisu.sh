@@ -267,15 +267,12 @@ if init_path.exists():
 # 6. Force start unauthenticated ADB in KERNEL_SU_RC
 if ksud_path.exists():
     ksud = ksud_path.read_text(encoding="utf-8")
-    old_rc = '"on post-fs-data\\n"\n    "\\tstart logd\\n"'
-    new_rc = '"on post-fs-data\\n"\n    "\\tstart logd\\n"\n    "\\tsetprop persist.sys.usb.config adb\\n"\n    "\\tsetprop sys.usb.config adb\\n"\n    "\\tsetprop ro.adb.secure 0\\n"\n    "\\tsetprop ro.debuggable 1\\n"\n    "\\tstart adbd\\n"'
-    if old_rc in ksud and "setprop sys.usb.config adb" not in ksud:
-        ksud = ksud.replace(old_rc, new_rc, 1)
-        old_nonenc = '"on nonencrypted\\n"'
-        new_boot = '"on boot\\n"\n    "\\tsetprop persist.sys.usb.config adb\\n"\n    "\\tsetprop sys.usb.config adb\\n"\n    "\\tsetprop ro.adb.secure 0\\n"\n    "\\tsetprop ro.debuggable 1\\n"\n    "\\tstart adbd\\n"\n\\n    "on nonencrypted\\n"'
+    old_nonenc = '"on nonencrypted\\n"'
+    new_boot = '"on boot\\n"\n    "\\tsetprop persist.sys.usb.config adb\\n"\n    "\\tsetprop sys.usb.config adb\\n"\n\\n    "on nonencrypted\\n"'
+    if old_nonenc in ksud and "setprop sys.usb.config adb" not in ksud:
         ksud = ksud.replace(old_nonenc, new_boot, 1)
         ksud_path.write_text(ksud, encoding="utf-8")
-        print("  - Updated ksud_integration.c: added early unauthenticated ADB to KERNEL_SU_RC")
+        print("  - Updated ksud_integration.c: added early ADB trigger to KERNEL_SU_RC on boot")
 PY
 
 echo "[PASS] ReSukiSU successfully synchronized and adapted for Linux 4.14 + SUSFS."

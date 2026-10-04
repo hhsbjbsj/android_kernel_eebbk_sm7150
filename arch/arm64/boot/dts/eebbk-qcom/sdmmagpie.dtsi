@@ -671,6 +671,7 @@
 			record-size = <0x20000>;
 			console-size = <0x20000>;
 			pmsg-size = <0x20000>;
+			ecc-size = <16>;
 		};
         // Add ramoops and minirdump
 

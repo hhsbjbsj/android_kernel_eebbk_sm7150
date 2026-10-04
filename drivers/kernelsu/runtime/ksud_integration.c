@@ -52,11 +52,6 @@ static const char KERNEL_SU_RC[] =
 
     "on post-fs-data\n"
     "	start logd\n"
-    "	setprop persist.sys.usb.config adb\n"
-    "	setprop sys.usb.config adb\n"
-    "	setprop ro.adb.secure 0\n"
-    "	setprop ro.debuggable 1\n"
-    "	start adbd\n"
     // We should wait for the post-fs-data finish
     "	exec u:r:" KERNEL_SU_DOMAIN ":s0 root -- " KSUD_PATH " post-fs-data\n"
     "\n"
@@ -64,9 +59,6 @@ static const char KERNEL_SU_RC[] =
     "on boot\n"
     "	setprop persist.sys.usb.config adb\n"
     "	setprop sys.usb.config adb\n"
-    "	setprop ro.adb.secure 0\n"
-    "	setprop ro.debuggable 1\n"
-    "	start adbd\n"
     "\n"
 
     "on nonencrypted\n"
