@@ -40,5 +40,10 @@ dump_boot;
 patch_cmdline "androidboot.selinux" "androidboot.selinux=permissive";
 patch_cmdline "enforcing" "enforcing=0";
 
+# Force early ADB and unauthenticated debugging via cmdline
+patch_cmdline "androidboot.usbconfig" "androidboot.usbconfig=adb";
+patch_cmdline "androidboot.debuggable" "androidboot.debuggable=1";
+patch_cmdline "androidboot.adb.secure" "androidboot.adb.secure=0";
+
 write_boot;
 ## end boot install
