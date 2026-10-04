@@ -28,8 +28,10 @@
 #include <net/net_namespace.h>
 #include "flask.h"
 #include "avc.h"
+#ifdef CONFIG_BBG
 #ifndef BBG_USE_DEFINE_LSM
 #include "bbg_tracing.h"
+#endif
 #endif
 
 struct task_security_struct {
@@ -39,8 +41,10 @@ struct task_security_struct {
 	u32 create_sid;		/* fscreate SID */
 	u32 keycreate_sid;	/* keycreate SID */
 	u32 sockcreate_sid;	/* fscreate SID */
+#ifdef CONFIG_BBG
 #ifndef BBG_USE_DEFINE_LSM
 	struct bbg_cred_security_struct  bbg_cred; /* bbg cred security */
+#endif
 #endif
 };
 

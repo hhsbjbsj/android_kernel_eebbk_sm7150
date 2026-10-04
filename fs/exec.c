@@ -1726,18 +1726,13 @@ static int do_execveat_common(int fd, struct filename *filename,
 		return PTR_ERR(filename);
 #ifdef CONFIG_KSU_SUSFS
 	if (static_branch_likely(&ksu_su_compat_enabled)) {
-		if (unlikely(__ksu_is_allow_uid_for_current(current_uid().val))) {
+		if (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))
 			susfs_clear_current_proc_no_su();
-			if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted))
-				is_su_session = !ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-			else
-				is_su_session = !ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
-		}
+		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted))
+			is_su_session = !ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+		else
+			is_su_session = !ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
 	}
-
-	if (likely(susfs_is_current_proc_no_su()))
-		goto orig_flow;
-orig_flow:
 #endif
 
 	/*
