@@ -13,6 +13,7 @@ proc-y       += inode.o root.o base.o generic.o array.o \
 		fd.o
 proc-$(CONFIG_TTY)      += proc_tty.o
 proc-y	+= cmdline.o
+proc-y	+= bootprof.o
 proc-y	+= consoles.o
 proc-y	+= cpuinfo.o
 proc-y	+= devices.o
