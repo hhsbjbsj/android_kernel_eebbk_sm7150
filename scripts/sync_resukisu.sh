@@ -9,7 +9,7 @@ echo "=========================================================="
 echo "== Syncing ReSukiSU from upstream main branch at build ==="
 echo "=========================================================="
 
-RESUKISU_REPO="https://github.com/ReSukiSU/ReSukiSU.git"
+RESUKISU_REPO="https://github.com/Baka-SU/BakaSU.git"
 UPSTREAM_DIR="${KERNELSU_UPSTREAM_DIR:-/tmp/ReSukiSU-upstream}"
 DEST_DIR="$KERNEL_DIR/drivers/kernelsu"
 
@@ -17,12 +17,12 @@ DEST_DIR="$KERNEL_DIR/drivers/kernelsu"
 # 1. Fetch / Clone ReSukiSU main with tags and commit history
 if [ -d "$UPSTREAM_DIR/.git" ]; then
     echo "[+] Updating existing ReSukiSU clone..."
-    git -C "$UPSTREAM_DIR" fetch --depth=2000 --tags origin main
+    git -C "$UPSTREAM_DIR" fetch --depth=2000 --tags origin main || git -C "$UPSTREAM_DIR" fetch --depth=2000 --tags https://github.com/ReSukiSU/ReSukiSU.git main
     git -C "$UPSTREAM_DIR" checkout -f origin/main
 else
     echo "[+] Cloning latest ReSukiSU main branch with tags..."
     rm -rf "$UPSTREAM_DIR"
-    git clone --depth=2000 --tags -b main "$RESUKISU_REPO" "$UPSTREAM_DIR"
+    git clone --depth=2000 --tags -b main "$RESUKISU_REPO" "$UPSTREAM_DIR" || git clone --depth=2000 --tags -b main "https://github.com/ReSukiSU/ReSukiSU.git" "$UPSTREAM_DIR"
 fi
 
 # 2. Extract authentic ReSukiSU metadata from upstream git
@@ -48,6 +48,11 @@ cp -r "$UPSTREAM_DIR/kernel/"* "$DEST_DIR/"
 rm -rf "$DEST_DIR/include/uapi"
 mkdir -p "$DEST_DIR/include/uapi"
 cp -r "$UPSTREAM_DIR/uapi/"* "$DEST_DIR/include/uapi/"
+
+echo "$KSU_COMMIT" > "$DEST_DIR/.resukisu_commit"
+echo "$KSU_TAG" > "$DEST_DIR/.resukisu_tag"
+echo "$KSU_VERCODE" > "$DEST_DIR/.resukisu_version"
+echo "$KSU_VERNAME" > "$DEST_DIR/.resukisu_version_full"
 
 
 
@@ -263,6 +268,46 @@ if init_path.exists():
         init_c = init_c.replace(old_enforce, new_enforce, 1)
         init_path.write_text(init_c, encoding="utf-8")
         print("  - Updated core/init.c: permissive mode preserved")
+
+# 6. Preserve multi-manager signatures
+sign_h_path = Path("drivers/kernelsu/manager/manager_sign.h")
+if sign_h_path.exists():
+    sign_h = sign_h_path.read_text(encoding="utf-8")
+    extra_sign_defs = """// 5ec1cff/KernelSU
+#define EXPECTED_SIZE_5EC1CFF 384
+#define EXPECTED_HASH_5EC1CFF "7e0c6d7278a3bb8e364e0fcba95afaf3666cf5ff3c245a3b63c8833bd0445cc4"
+
+// rsuntk/KernelSU
+#define EXPECTED_SIZE_RSUNTK 0x396
+#define EXPECTED_HASH_RSUNTK "f415f4ed9435427e1fdf7f1fccd4dbc07b3d6b8751e4dbcec6f19671f427870b"
+
+// SukiSU-Ultra/SukiSU-Ultra
+#define EXPECTED_SIZE_SUKISU 0x35c
+#define EXPECTED_HASH_SUKISU "947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
+"""
+    if "EXPECTED_SIZE_SUKISU" not in sign_h:
+        guard_end = sign_h.rfind("#endif")
+        if guard_end != -1:
+            sign_h = sign_h[:guard_end] + extra_sign_defs + "\n" + sign_h[guard_end:]
+            sign_h_path.write_text(sign_h, encoding="utf-8")
+            print("  - Updated manager_sign.h: preserved multi-manager signatures")
+
+apk_sign_c_path = Path("drivers/kernelsu/manager/apk_sign.c")
+if apk_sign_c_path.exists():
+    apk_sign_c = apk_sign_c_path.read_text(encoding="utf-8")
+    old_keys_entry = """#ifdef CONFIG_KSU_MULTI_MANAGER_SUPPORT
+    { EXPECTED_SIZE_OFFICIAL, EXPECTED_HASH_OFFICIAL }, // tiann/KernelSU
+    { EXPECTED_SIZE_KOWX712, EXPECTED_HASH_KOWX712 },"""
+    extra_keys_entry = """#ifdef CONFIG_KSU_MULTI_MANAGER_SUPPORT
+    { EXPECTED_SIZE_OFFICIAL, EXPECTED_HASH_OFFICIAL }, // tiann/KernelSU
+    { EXPECTED_SIZE_5EC1CFF, EXPECTED_HASH_5EC1CFF }, // 5ec1cff/KernelSU
+    { EXPECTED_SIZE_RSUNTK, EXPECTED_HASH_RSUNTK }, // rsuntk/KernelSU
+    { EXPECTED_SIZE_SUKISU, EXPECTED_HASH_SUKISU }, // SukiSU-Ultra/SukiSU-Ultra
+    { EXPECTED_SIZE_KOWX712, EXPECTED_HASH_KOWX712 },"""
+    if old_keys_entry in apk_sign_c:
+        apk_sign_c = apk_sign_c.replace(old_keys_entry, extra_keys_entry, 1)
+        apk_sign_c_path.write_text(apk_sign_c, encoding="utf-8")
+        print("  - Updated apk_sign.c: preserved multi-manager signature table")
 
 PY
 
