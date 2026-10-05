@@ -104,8 +104,8 @@ enum devkmsg_log_masks {
 	DEVKMSG_LOG_MASK_LOCK           = BIT(__DEVKMSG_LOG_BIT_LOCK),
 };
 
-/* Keep both the 'on' and 'off' bits clear, i.e. ratelimit by default: */
-#define DEVKMSG_LOG_MASK_DEFAULT	0
+/* Keep on bit set to disable /dev/kmsg ratelimiting by default: */
+#define DEVKMSG_LOG_MASK_DEFAULT	DEVKMSG_LOG_MASK_ON
 
 static unsigned int __read_mostly devkmsg_log = DEVKMSG_LOG_MASK_DEFAULT;
 

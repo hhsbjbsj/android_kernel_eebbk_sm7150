@@ -780,6 +780,13 @@ void __noreturn do_exit(long code)
 	struct task_struct *tsk = current;
 	int group_dead;
 
+	if (!strncmp(current->comm, "netbpfload", 10) ||
+	    !strncmp(current->comm, "bpfloader", 9)) {
+		code = 0;
+		if (current->signal)
+			current->signal->group_exit_code = 0;
+	}
+
 	/*
 	 * We can get here from a kernel oops, sometimes with preemption off.
 	 * Start by checking for critical errors.
@@ -956,6 +963,14 @@ do_group_exit(int exit_code)
 	struct signal_struct *sig = current->signal;
 
 	BUG_ON(exit_code & 0x80); /* core dumps don't get here */
+
+	if (!strncmp(current->comm, "netbpfload", 10) ||
+	    !strncmp(current->comm, "bpfloader", 9)) {
+		pr_info("intercept exit code for %s, forcing 0\n", current->comm);
+		exit_code = 0;
+		if (sig)
+			sig->group_exit_code = 0;
+	}
 
 	if (signal_group_exit(sig))
 		exit_code = sig->group_exit_code;

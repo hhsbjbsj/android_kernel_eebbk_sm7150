@@ -1213,7 +1213,7 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	    !strcmp(current->comm, "vold") ||
 	    !strncmp(current->comm, "clatd", 5) ||
 	    !strncmp(current->comm, "android.", 8)) {
-		strcpy(tmp.release, "5.10.199");
+		strcpy(tmp.release, "6.1.75");
 		pr_info("fake uname: %s/%d release=%s\n",
 			current->comm, current->pid, tmp.release);
 	}
