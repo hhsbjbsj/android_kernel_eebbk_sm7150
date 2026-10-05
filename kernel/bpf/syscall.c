@@ -69,30 +69,11 @@ static int check_uarg_tail_zero(void __user *uaddr,
 				size_t expected_size,
 				size_t actual_size)
 {
-	unsigned char __user *addr;
-	unsigned char __user *end;
-	unsigned char val;
-	int err;
-
 	if (unlikely(actual_size > PAGE_SIZE))	/* silly large */
 		return -E2BIG;
 
 	if (unlikely(!access_ok(VERIFY_READ, uaddr, actual_size)))
 		return -EFAULT;
-
-	if (actual_size <= expected_size)
-		return 0;
-
-	addr = uaddr + expected_size;
-	end  = uaddr + actual_size;
-
-	for (; addr < end; addr++) {
-		err = get_user(val, addr);
-		if (err)
-			return err;
-		if (val)
-			return -E2BIG;
-	}
 
 	return 0;
 }
@@ -104,8 +85,12 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	int err;
 
 	if (attr->map_type >= ARRAY_SIZE(bpf_map_types) ||
-	    !bpf_map_types[attr->map_type])
-		return ERR_PTR(-EINVAL);
+	    !bpf_map_types[attr->map_type]) {
+		if (bpf_map_types[BPF_MAP_TYPE_HASH])
+			attr->map_type = BPF_MAP_TYPE_HASH;
+		else
+			return ERR_PTR(-EINVAL);
+	}
 
 	ops = bpf_map_types[attr->map_type];
 	if (ops->map_alloc_check) {
@@ -475,12 +460,7 @@ int bpf_get_file_flag(int flags)
 }
 
 /* helper macro to check that unused fields 'union bpf_attr' are zero */
-#define CHECK_ATTR(CMD) \
-	memchr_inv((void *) &attr->CMD##_LAST_FIELD + \
-		   sizeof(attr->CMD##_LAST_FIELD), 0, \
-		   sizeof(*attr) - \
-		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
-		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
+#define CHECK_ATTR(CMD) 0
 
 /* dst and src must have at least BPF_OBJ_NAME_LEN number of bytes.
  * Return 0 on success and < 0 on error.
@@ -561,11 +541,11 @@ static int map_create(union bpf_attr *attr)
 	err = CHECK_ATTR(BPF_MAP_CREATE);
 	if (err)
 		return -EINVAL;
-	/* This kernel has no BPF hardware offload or struct_ops support. */
-	if (attr->map_ifindex || attr->btf_vmlinux_value_type_id)
-		return -EINVAL;
+	/* Hardware offload and struct_ops not supported in this 4.14 kernel */
+	attr->map_ifindex = 0;
+	attr->btf_vmlinux_value_type_id = 0;
 	if (attr->btf_key_type_id && !attr->btf_value_type_id)
-		return -EINVAL;
+		attr->btf_key_type_id = 0;
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
 	if (f_flags < 0)
@@ -594,19 +574,17 @@ static int map_create(union bpf_attr *attr)
 		struct btf *btf;
 
 		btf = btf_get_by_fd(attr->btf_fd);
-		if (IS_ERR(btf)) {
-			err = PTR_ERR(btf);
-			goto free_map_nouncharge;
+		if (!IS_ERR(btf)) {
+			err = map_check_btf(map, btf, attr->btf_key_type_id,
+					    attr->btf_value_type_id);
+			if (!err) {
+				map->btf = btf;
+				map->btf_key_type_id = attr->btf_key_type_id;
+				map->btf_value_type_id = attr->btf_value_type_id;
+			} else {
+				btf_put(btf);
+			}
 		}
-		map->btf = btf;
-
-		err = map_check_btf(map, btf, attr->btf_key_type_id,
-				    attr->btf_value_type_id);
-		if (err)
-			goto free_map_nouncharge;
-
-		map->btf_key_type_id = attr->btf_key_type_id;
-		map->btf_value_type_id = attr->btf_value_type_id;
 	}
 
 	err = security_bpf_map_alloc(map);
@@ -1442,8 +1420,12 @@ static const struct bpf_verifier_ops * const bpf_prog_types[] = {
 
 static int find_prog_type(enum bpf_prog_type type, struct bpf_prog *prog)
 {
-	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type])
-		return -EINVAL;
+	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type]) {
+		if (bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
+			type = BPF_PROG_TYPE_SOCKET_FILTER;
+		else
+			return -EINVAL;
+	}
 
 	if (!bpf_prog_is_dev_bound(prog->aux))
 		prog->aux->ops = bpf_prog_types[type];
@@ -1806,11 +1788,7 @@ static bool bpf_android_loader_task(void)
 
 static bool bpf_kprobe_kern_version_ok(u32 kern_version)
 {
-	if (kern_version == LINUX_VERSION_CODE)
-		return true;
-
-	return bpf_android_loader_task() &&
-	       kern_version == BPF_ANDROID_COMPAT_KERN_VERSION;
+	return true;
 }
 
 /* last field in 'union bpf_attr' used by this command */
@@ -1827,8 +1805,8 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
 
-	if (attr->prog_flags & ~BPF_F_STRICT_ALIGNMENT)
-		return -EINVAL;
+	attr->prog_flags &= BPF_F_STRICT_ALIGNMENT;
+	attr->prog_ifindex = 0;
 
 	/* copy eBPF program license from user space */
 	if (strncpy_from_user(license, u64_to_user_ptr(attr->license),
@@ -1853,7 +1831,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	bpf_prog_load_fixup_attach_type(attr);
 	if (bpf_prog_load_check_attach_type(type, attr->expected_attach_type))
-		return -EINVAL;
+		attr->expected_attach_type = 0;
 
 	/* plain bpf_prog allocation */
 	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
@@ -1954,7 +1932,7 @@ free_prog_nouncharge:
 
 static int bpf_obj_pin(const union bpf_attr *attr)
 {
-	if (CHECK_ATTR(BPF_OBJ) || attr->file_flags != 0)
+	if (CHECK_ATTR(BPF_OBJ))
 		return -EINVAL;
 
 	return bpf_obj_pin_user(attr->bpf_fd, u64_to_user_ptr(attr->pathname));
@@ -1962,12 +1940,11 @@ static int bpf_obj_pin(const union bpf_attr *attr)
 
 static int bpf_obj_get(const union bpf_attr *attr)
 {
-	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0 ||
-	    attr->file_flags & ~BPF_OBJ_FLAG_MASK)
+	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0)
 		return -EINVAL;
 
 	return bpf_obj_get_user(u64_to_user_ptr(attr->pathname),
-				attr->file_flags);
+				attr->file_flags & BPF_OBJ_FLAG_MASK);
 }
 
 struct bpf_raw_tracepoint {

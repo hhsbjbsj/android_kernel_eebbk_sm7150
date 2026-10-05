@@ -353,6 +353,12 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		}
 		buffer[sizeof(buffer) - 1] = '\0';
 
+		if (!strncmp(buffer, "bpfloader", 9)) {
+			pr_warn("reboot: intercepted '%s' reboot request to prevent bootloop!\n", buffer);
+			mutex_unlock(&reboot_mutex);
+			return 0;
+		}
+
 		kernel_restart(buffer);
 		break;
 
