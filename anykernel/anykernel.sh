@@ -22,12 +22,14 @@ BLOCK=boot;
 IS_SLOT_DEVICE=auto;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
+NO_MAGISK_CHECK=1;
 
 # lowercase fallback aliases
 block=boot;
 is_slot_device=auto;
 ramdisk_compression=auto;
 patch_vbmeta_flag=auto;
+no_magisk_check=1;
 
 ## AnyKernel methods (DO NOT CHANGE)
 # import patching functions/variables - see for reference

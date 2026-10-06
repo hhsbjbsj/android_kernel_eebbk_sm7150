@@ -108,8 +108,7 @@ jobs:
           ccache -s
 
           make -j$(nproc --all) O=out CC="ccache clang" LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
-          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld KSU_EXPECTED_SIZE=0x38b KSU_EXPECTED_HASH="aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11" Image dtbs 2>&1 | tee kernel.log
-          gzip -c -9 out/arch/arm64/boot/Image > out/arch/arm64/boot/Image.gz
+          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld KSU_EXPECTED_SIZE=0x38b KSU_EXPECTED_HASH="aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11" Image Image.gz dtbs 2>&1 | tee kernel.log
 
           ccache -s
 
@@ -149,7 +148,8 @@ jobs:
       - name: Package AnyKernel3 Flashable ZIP
         if: env.CHECK_FILE_IS_OK == 'true'
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          git -C AnyKernel3 checkout dca9dc3
           rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md AnyKernel3/LICENSE
 
           # Clean any existing sample scripts or dtb/dtbo
