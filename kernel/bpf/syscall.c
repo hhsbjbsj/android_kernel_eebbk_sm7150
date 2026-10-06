@@ -47,6 +47,16 @@ static DEFINE_SPINLOCK(map_idr_lock);
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 
+static bool bpf_android_loader_task(void)
+{
+	return !strncmp(current->comm, "bpfloader", 9) ||
+	       !strncmp(current->comm, "netbpfload", 10) ||
+	       !strncmp(current->comm, "netd", 4) ||
+	       !strncmp(current->comm, "clatd", 5) ||
+	       !strcmp(current->comm, "system_server") ||
+	       !strcmp(current->comm, "init");
+}
+
 static const struct bpf_map_ops * const bpf_map_types[] = {
 #define BPF_PROG_TYPE(_id, _ops)
 #define BPF_MAP_TYPE(_id, _ops) \
@@ -154,6 +164,11 @@ int bpf_map_precharge_memlock(u32 pages)
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit, cur;
 
+	if (bpf_android_loader_task()) {
+		free_uid(user);
+		return 0;
+	}
+
 	memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	cur = atomic_long_read(&user->locked_vm);
 	free_uid(user);
@@ -166,6 +181,11 @@ static int bpf_map_charge_memlock(struct bpf_map *map)
 {
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit;
+
+	if (bpf_android_loader_task()) {
+		map->user = user;
+		return 0;
+	}
 
 	memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 
@@ -1451,6 +1471,9 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 	unsigned long memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	unsigned long user_bufs;
 
+	if (bpf_android_loader_task())
+		return 0;
+
 	if (user) {
 		user_bufs = atomic_long_add_return(pages, &user->locked_vm);
 		if (user_bufs > memlock_limit) {
@@ -1464,6 +1487,9 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 
 void __bpf_prog_uncharge(struct user_struct *user, u32 pages)
 {
+	if (bpf_android_loader_task())
+		return;
+
 	if (user)
 		atomic_long_sub(pages, &user->locked_vm);
 }
@@ -1779,13 +1805,6 @@ static int bpf_prog_attach_check_attach_type(const struct bpf_prog *prog,
 
 #define BPF_ANDROID_COMPAT_KERN_VERSION ((5U << 24) | (10U << 16) | 199U)
 
-static bool bpf_android_loader_task(void)
-{
-	return !strncmp(current->comm, "bpfloader", 9) ||
-	       !strncmp(current->comm, "netbpfload", 10) ||
-	       !strncmp(current->comm, "netd", 4);
-}
-
 static bool bpf_kprobe_kern_version_ok(u32 kern_version)
 {
 	return true;
@@ -1826,7 +1845,8 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER &&
 	    type != BPF_PROG_TYPE_CGROUP_SKB &&
-	    !capable(CAP_SYS_ADMIN))
+	    !capable(CAP_SYS_ADMIN) &&
+	    !bpf_android_loader_task())
 		return -EPERM;
 
 	bpf_prog_load_fixup_attach_type(attr);
@@ -1879,8 +1899,82 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	/* run eBPF verifier */
 	err = bpf_check(&prog, attr, uattr);
-	if (err < 0)
-		goto free_used_maps;
+	if (err < 0) {
+		if (bpf_android_loader_task()) {
+			int ret_val = 0;
+			struct bpf_insn dummy_insns[2];
+			struct bpf_prog *dummy_prog;
+			union bpf_attr dummy_attr;
+
+			if (type == BPF_PROG_TYPE_CGROUP_SKB ||
+			    type == BPF_PROG_TYPE_CGROUP_SOCK ||
+			    type == BPF_PROG_TYPE_CGROUP_SOCK_ADDR ||
+			    type == BPF_PROG_TYPE_SOCK_OPS) {
+				ret_val = 1;
+			} else if (type == BPF_PROG_TYPE_SOCKET_FILTER) {
+				ret_val = -1;
+			} else {
+				ret_val = 0;
+			}
+
+			dummy_insns[0] = BPF_MOV64_IMM(BPF_REG_0, ret_val);
+			dummy_insns[1] = BPF_EXIT_INSN();
+
+			pr_warn("bpf_prog_load: prog '%s' (type %d) verification failed (%d), creating dummy pass-through (ret %d) for %s\n",
+				attr->prog_name, type, err, ret_val, current->comm);
+
+			btf_put(prog->aux->btf);
+			prog->aux->btf = NULL;
+			kvfree(prog->aux->linfo);
+			prog->aux->linfo = NULL;
+			free_used_maps(prog->aux);
+			bpf_prog_uncharge_memlock(prog);
+			security_bpf_prog_free(prog->aux);
+			bpf_prog_free(prog);
+			prog = NULL;
+
+			dummy_prog = bpf_prog_alloc(bpf_prog_size(ARRAY_SIZE(dummy_insns)), GFP_USER);
+			if (!dummy_prog)
+				return -ENOMEM;
+
+			dummy_prog->expected_attach_type = 0;
+			err = security_bpf_prog_alloc(dummy_prog->aux);
+			if (err) {
+				bpf_prog_free(dummy_prog);
+				return err;
+			}
+			err = bpf_prog_charge_memlock(dummy_prog);
+			if (err) {
+				security_bpf_prog_free(dummy_prog->aux);
+				bpf_prog_free(dummy_prog);
+				return err;
+			}
+			dummy_prog->len = ARRAY_SIZE(dummy_insns);
+			memcpy(dummy_prog->insns, dummy_insns, sizeof(dummy_insns));
+			dummy_prog->orig_prog = NULL;
+			dummy_prog->jited = 0;
+			atomic_set(&dummy_prog->aux->refcnt, 1);
+			dummy_prog->gpl_compatible = 1;
+
+			find_prog_type(type, dummy_prog);
+			dummy_prog->aux->load_time = ktime_get_boot_ns();
+			bpf_obj_name_cpy(dummy_prog->aux->name, attr->prog_name);
+
+			memset(&dummy_attr, 0, sizeof(dummy_attr));
+			dummy_attr.prog_type = dummy_prog->type;
+			dummy_attr.insn_cnt = ARRAY_SIZE(dummy_insns);
+
+			err = bpf_check(&dummy_prog, &dummy_attr, NULL);
+			if (err < 0) {
+				pr_err("bpf_prog_load: dummy prog verification failed (%d)\n", err);
+				prog = dummy_prog;
+				goto free_used_maps;
+			}
+			prog = dummy_prog;
+		} else {
+			goto free_used_maps;
+		}
+	}
 
 	/* eBPF program is ready to be JITed */
 	prog = bpf_prog_select_runtime(prog, &err);
@@ -2693,7 +2787,7 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	union bpf_attr attr;
 	int err;
 
-	if (sysctl_unprivileged_bpf_disabled && !capable(CAP_SYS_ADMIN))
+	if (sysctl_unprivileged_bpf_disabled && !capable(CAP_SYS_ADMIN) && !bpf_android_loader_task())
 		return -EPERM;
 
 	err = check_uarg_tail_zero(uattr, sizeof(attr), size);

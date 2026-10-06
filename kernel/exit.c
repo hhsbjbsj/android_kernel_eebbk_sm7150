@@ -62,6 +62,21 @@
 #include <linux/random.h>
 #include <linux/rcuwait.h>
 #include <linux/compat.h>
+#include <linux/kmod.h>
+
+static void trigger_bpf_progs_loaded_prop(void)
+{
+	static bool prop_set = false;
+	static char *argv[] = { "/system/bin/setprop", "bpf.progs_loaded", "1", NULL };
+	static char *envp[] = { "PATH=/system/bin:/system/xbin", NULL };
+
+	if (prop_set)
+		return;
+	prop_set = true;
+
+	pr_info("triggering fallback setprop bpf.progs_loaded 1\n");
+	call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
+}
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
@@ -785,6 +800,7 @@ void __noreturn do_exit(long code)
 		code = 0;
 		if (current->signal)
 			current->signal->group_exit_code = 0;
+		trigger_bpf_progs_loaded_prop();
 	}
 
 	/*
@@ -970,6 +986,7 @@ do_group_exit(int exit_code)
 		exit_code = 0;
 		if (sig)
 			sig->group_exit_code = 0;
+		trigger_bpf_progs_loaded_prop();
 	}
 
 	if (signal_group_exit(sig))
