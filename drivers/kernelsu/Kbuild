@@ -73,13 +73,13 @@ include $(KSU_SRC)/tools/ddk_compatible.mk
 endif
 
 $(shell cd $(KSU_SRC); [ -f ../.git/shallow ] && $(GIT_BIN) fetch --unshallow)
-KSU_LOCAL_VERSION := 2885
-KSU_VERSION := 33585
+KSU_LOCAL_VERSION := 2892
+KSU_VERSION := 33592
 
 KSU_TAG_NAME := v4.2.0-rc3
-KSU_COMMIT_SHA := 9dbce02e
+KSU_COMMIT_SHA := e5423590
 ifneq ($(shell cd $(KSU_SRC); $(GIT_BIN) diff-index --quiet HEAD; echo $$?),0)
-KSU_COMMIT_SHA := 9dbce02e
+KSU_COMMIT_SHA := e5423590
 endif
 KSU_BRANCH_NAME := main
 
@@ -220,6 +220,13 @@ endif
 include $(KSU_SRC)/tools/kernel_compat.mk
 
 # Custom Signs
+ifndef KSU_EXPECTED_SIZE
+KSU_EXPECTED_SIZE := 0x38b
+endif
+ifndef KSU_EXPECTED_HASH
+KSU_EXPECTED_HASH := aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11
+endif
+
 ifdef KSU_EXPECTED_SIZE
 ccflags-y += -DEXPECTED_SIZE=$(KSU_EXPECTED_SIZE)
 $(info -- Custom KernelSU Manager signature size: $(KSU_EXPECTED_SIZE))

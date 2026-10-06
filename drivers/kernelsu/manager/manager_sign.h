@@ -25,6 +25,17 @@
 #define EXPECTED_SIZE_SUKISU 0x35c
 #define EXPECTED_HASH_SUKISU "947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
 
+// Custom Manager (User Customized)
+#ifndef EXPECTED_SIZE
+#define EXPECTED_SIZE 0x38b
+#endif
+#ifndef EXPECTED_HASH
+#define EXPECTED_HASH "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+#endif
+
+#define EXPECTED_SIZE_CUSTOM 0x38b
+#define EXPECTED_HASH_CUSTOM "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+
 typedef struct {
     unsigned size;
     const char *sha256;

@@ -108,7 +108,7 @@ jobs:
           ccache -s
 
           make -j$(nproc --all) O=out CC="ccache clang" LD=ld.lld vendor/sdmsteppe-perf_defconfig h130.config
-          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld Image dtbs 2>&1 | tee kernel.log
+          make -j$(nproc --all) O=out CC="ccache clang" DTC=dtc LD=ld.lld KSU_EXPECTED_SIZE=0x38b KSU_EXPECTED_HASH="aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11" Image dtbs 2>&1 | tee kernel.log
           gzip -c -9 out/arch/arm64/boot/Image > out/arch/arm64/boot/Image.gz
 
           ccache -s

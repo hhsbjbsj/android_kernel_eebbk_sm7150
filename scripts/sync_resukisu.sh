@@ -31,7 +31,7 @@ KSU_COMMIT_FULL=$(git -C "$UPSTREAM_DIR" rev-parse HEAD)
 KSU_TAG=$(git -C "$UPSTREAM_DIR" describe --abbrev=0 --tags 2>/dev/null || echo "v4.2.0-rc3")
 KSU_COUNT=$(git -C "$UPSTREAM_DIR" rev-list --count HEAD 2>/dev/null || echo 1551)
 KSU_VERCODE=$((30000 + KSU_COUNT + 700))
-KSU_VERNAME="${KSU_TAG}-${KSU_COMMIT}@ReSukiSU"
+KSU_VERNAME="${KSU_TAG}-${KSU_COMMIT}@BakaSU"
 
 echo "[+] Resolved Upstream ReSukiSU Metadata:"
 echo "    Tag:         $KSU_TAG"
@@ -284,6 +284,17 @@ if sign_h_path.exists():
 // SukiSU-Ultra/SukiSU-Ultra
 #define EXPECTED_SIZE_SUKISU 0x35c
 #define EXPECTED_HASH_SUKISU "947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
+
+// Custom Manager (User Customized)
+#ifndef EXPECTED_SIZE
+#define EXPECTED_SIZE 0x38b
+#endif
+#ifndef EXPECTED_HASH
+#define EXPECTED_HASH "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+#endif
+
+#define EXPECTED_SIZE_CUSTOM 0x38b
+#define EXPECTED_HASH_CUSTOM "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
 """
     if "EXPECTED_SIZE_SUKISU" not in sign_h:
         guard_end = sign_h.rfind("#endif")
@@ -303,11 +314,40 @@ if apk_sign_c_path.exists():
     { EXPECTED_SIZE_5EC1CFF, EXPECTED_HASH_5EC1CFF }, // 5ec1cff/KernelSU
     { EXPECTED_SIZE_RSUNTK, EXPECTED_HASH_RSUNTK }, // rsuntk/KernelSU
     { EXPECTED_SIZE_SUKISU, EXPECTED_HASH_SUKISU }, // SukiSU-Ultra/SukiSU-Ultra
-    { EXPECTED_SIZE_KOWX712, EXPECTED_HASH_KOWX712 },"""
+    { EXPECTED_SIZE_KOWX712, EXPECTED_HASH_KOWX712 },
+    { EXPECTED_SIZE_CUSTOM, EXPECTED_HASH_CUSTOM }, // Custom Manager (User Customized)"""
     if old_keys_entry in apk_sign_c:
         apk_sign_c = apk_sign_c.replace(old_keys_entry, extra_keys_entry, 1)
         apk_sign_c_path.write_text(apk_sign_c, encoding="utf-8")
         print("  - Updated apk_sign.c: preserved multi-manager signature table")
+
+# 7. Align KERNEL_SU_UAPI_VERSION to 4
+uapi_h_path = Path("drivers/kernelsu/include/uapi/supercall.h")
+if uapi_h_path.exists():
+    uapi_h = uapi_h_path.read_text(encoding="utf-8")
+    uapi_h = uapi_h.replace("static const __u32 KERNEL_SU_UAPI_VERSION = 5;", "static const __u32 KERNEL_SU_UAPI_VERSION = 4;")
+    uapi_h_path.write_text(uapi_h, encoding="utf-8")
+    print("  - Updated supercall.h: aligned KERNEL_SU_UAPI_VERSION to 4")
+
+# 8. Set default KSU_EXPECTED_SIZE and KSU_EXPECTED_HASH in Kbuild
+kbuild_path = Path("drivers/kernelsu/Kbuild")
+if kbuild_path.exists():
+    kbuild = kbuild_path.read_text(encoding="utf-8")
+    if "KSU_EXPECTED_SIZE := 0x38b" not in kbuild:
+        old_signs = "# Custom Signs\nifdef KSU_EXPECTED_SIZE"
+        new_signs = """# Custom Signs
+ifndef KSU_EXPECTED_SIZE
+KSU_EXPECTED_SIZE := 0x38b
+endif
+ifndef KSU_EXPECTED_HASH
+KSU_EXPECTED_HASH := aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11
+endif
+
+ifdef KSU_EXPECTED_SIZE"""
+        if old_signs in kbuild:
+            kbuild = kbuild.replace(old_signs, new_signs, 1)
+            kbuild_path.write_text(kbuild, encoding="utf-8")
+            print("  - Updated Kbuild: set default KSU_EXPECTED_SIZE and KSU_EXPECTED_HASH")
 
 PY
 
