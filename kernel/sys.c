@@ -1205,18 +1205,21 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set))
 		susfs_spoof_uname(&tmp);
 #endif
+	uid_t uid = current_uid().val;
+
 	if (!strncmp(current->comm, "bpfloader", 9) ||
 	    !strncmp(current->comm, "netbpfload", 10)) {
 		strcpy(tmp.release, "6.1.75");
-		pr_info("fake uname: %s/%d release=%s\n",
-			current->comm, current->pid, tmp.release);
+		pr_info("fake uname: %s/%d (uid %u) release=%s\n",
+			current->comm, current->pid, uid, tmp.release);
 	} else if (!strncmp(current->comm, "netd", 4) ||
 		   !strncmp(current->comm, "clatd", 5) ||
 		   !strcmp(current->comm, "lmkd") ||
-		   !strcmp(current->comm, "system_server")) {
+		   !strcmp(current->comm, "system_server") ||
+		   (uid == 1000)) {
 		strcpy(tmp.release, "5.10.199");
-		pr_info("fake uname: %s/%d release=%s\n",
-			current->comm, current->pid, tmp.release);
+		pr_info("fake uname: %s/%d (uid %u) release=%s\n",
+			current->comm, current->pid, uid, tmp.release);
 	}
 	up_read(&uts_sem);
 	if (copy_to_user(name, &tmp, sizeof(tmp)))

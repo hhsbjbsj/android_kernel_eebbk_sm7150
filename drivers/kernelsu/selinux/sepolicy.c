@@ -439,8 +439,10 @@ static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src, stru
         datum = &node->datum;
 
         // Allow updating permission bits of existing xperms
-        for (i = 0; i < ARRAY_SIZE(xperms.perms.p); i++)
-            datum->u.xperms->perms.p[i] |= xperms.perms.p[i];
+        if (datum->u.xperms) {
+            for (i = 0; i < ARRAY_SIZE(xperms.perms.p); i++)
+                datum->u.xperms->perms.p[i] |= xperms.perms.p[i];
+        }
     }
 }
 

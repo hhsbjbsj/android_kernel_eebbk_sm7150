@@ -47,10 +47,29 @@ static DEFINE_SPINLOCK(map_idr_lock);
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 
-static bool bpf_android_loader_task(void)
+static bool bpf_is_privileged_task(void)
 {
-	return !strncmp(current->comm, "bpfloader", 9) ||
-	       !strncmp(current->comm, "netbpfload", 10);
+	uid_t uid = current_uid().val;
+
+	/* Root (UID 0) and System (UID 1000, AID_SYSTEM / system_server) */
+	if (uid == 0 || uid == 1000)
+		return true;
+
+	/* Admin capabilities */
+	if (capable(CAP_SYS_ADMIN) || capable(CAP_NET_ADMIN))
+		return true;
+
+	/* Android system daemons and Zygote-spawned threads */
+	if (!strncmp(current->comm, "bpfloader", 9) ||
+	    !strncmp(current->comm, "netbpfload", 10) ||
+	    !strncmp(current->comm, "netd", 4) ||
+	    !strncmp(current->comm, "clatd", 5) ||
+	    !strcmp(current->comm, "system_server") ||
+	    !strcmp(current->comm, "main") ||
+	    !strncmp(current->comm, "init", 4))
+		return true;
+
+	return false;
 }
 
 static const struct bpf_map_ops * const bpf_map_types[] = {
@@ -92,7 +111,7 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 
 	if (attr->map_type >= ARRAY_SIZE(bpf_map_types) ||
 	    !bpf_map_types[attr->map_type]) {
-		if (bpf_android_loader_task() && bpf_map_types[BPF_MAP_TYPE_HASH])
+		if (bpf_is_privileged_task() && bpf_map_types[BPF_MAP_TYPE_HASH])
 			attr->map_type = BPF_MAP_TYPE_HASH;
 		else
 			return ERR_PTR(-EINVAL);
@@ -160,7 +179,7 @@ int bpf_map_precharge_memlock(u32 pages)
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit, cur;
 
-	if (bpf_android_loader_task()) {
+	if (bpf_is_privileged_task()) {
 		free_uid(user);
 		return 0;
 	}
@@ -178,7 +197,7 @@ static int bpf_map_charge_memlock(struct bpf_map *map)
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit;
 
-	if (bpf_android_loader_task()) {
+	if (bpf_is_privileged_task()) {
 		map->user = user;
 		return 0;
 	}
@@ -1437,7 +1456,7 @@ static const struct bpf_verifier_ops * const bpf_prog_types[] = {
 static int find_prog_type(enum bpf_prog_type type, struct bpf_prog *prog)
 {
 	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type]) {
-		if (bpf_android_loader_task() && bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
+		if (bpf_is_privileged_task() && bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
 			type = BPF_PROG_TYPE_SOCKET_FILTER;
 		else
 			return -EINVAL;
@@ -1467,7 +1486,7 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 	unsigned long memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	unsigned long user_bufs;
 
-	if (bpf_android_loader_task())
+	if (bpf_is_privileged_task())
 		return 0;
 
 	if (user) {
@@ -1483,7 +1502,7 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 
 void __bpf_prog_uncharge(struct user_struct *user, u32 pages)
 {
-	if (bpf_android_loader_task())
+	if (bpf_is_privileged_task())
 		return;
 
 	if (user)
@@ -1841,8 +1860,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER &&
 	    type != BPF_PROG_TYPE_CGROUP_SKB &&
-	    !capable(CAP_SYS_ADMIN) &&
-	    !bpf_android_loader_task())
+	    !bpf_is_privileged_task())
 		return -EPERM;
 
 	bpf_prog_load_fixup_attach_type(attr);
@@ -1896,7 +1914,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	/* run eBPF verifier */
 	err = bpf_check(&prog, attr, uattr);
 	if (err < 0) {
-		if (bpf_android_loader_task()) {
+		if (bpf_is_privileged_task()) {
 			int ret_val = 0;
 			struct bpf_insn dummy_insns[2];
 			struct bpf_prog *dummy_prog;
@@ -2783,7 +2801,7 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	union bpf_attr attr;
 	int err;
 
-	if (sysctl_unprivileged_bpf_disabled && !capable(CAP_SYS_ADMIN) && !bpf_android_loader_task())
+	if (sysctl_unprivileged_bpf_disabled && !bpf_is_privileged_task())
 		return -EPERM;
 
 	err = check_uarg_tail_zero(uattr, sizeof(attr), size);

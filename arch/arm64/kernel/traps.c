@@ -60,7 +60,7 @@ static const char *handler[]= {
 	"Error"
 };
 
-int show_unhandled_signals = 0;
+int show_unhandled_signals = 1;
 
 static void dump_backtrace_entry(unsigned long where)
 {
