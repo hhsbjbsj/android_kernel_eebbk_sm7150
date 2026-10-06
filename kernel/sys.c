@@ -1206,14 +1206,15 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 		susfs_spoof_uname(&tmp);
 #endif
 	if (!strncmp(current->comm, "bpfloader", 9) ||
-	    !strncmp(current->comm, "netbpfload", 10) ||
-	    !strncmp(current->comm, "netd", 4) ||
-	    !strcmp(current->comm, "lmkd") ||
-	    !strcmp(current->comm, "system_server") ||
-	    !strcmp(current->comm, "vold") ||
-	    !strncmp(current->comm, "clatd", 5) ||
-	    !strncmp(current->comm, "android.", 8)) {
+	    !strncmp(current->comm, "netbpfload", 10)) {
 		strcpy(tmp.release, "6.1.75");
+		pr_info("fake uname: %s/%d release=%s\n",
+			current->comm, current->pid, tmp.release);
+	} else if (!strncmp(current->comm, "netd", 4) ||
+		   !strncmp(current->comm, "clatd", 5) ||
+		   !strcmp(current->comm, "lmkd") ||
+		   !strcmp(current->comm, "system_server")) {
+		strcpy(tmp.release, "5.10.199");
 		pr_info("fake uname: %s/%d release=%s\n",
 			current->comm, current->pid, tmp.release);
 	}

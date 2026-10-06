@@ -1225,6 +1225,11 @@ static void device_restart_work_hdlr(struct work_struct *work)
 	struct subsys_device *dev = container_of(work, struct subsys_device,
 							device_restart_work);
 
+	if (dev->desc && dev->desc->name && !strcmp(dev->desc->name, "modem")) {
+		pr_warn("subsys-restart: ignoring SoC reset for modem on Wi-Fi tablet\n");
+		return;
+	}
+
 	notify_each_subsys_device(&dev, 1, SUBSYS_SOC_RESET, NULL);
 	/*
 	 * Temporary workaround until ramdump userspace application calls
@@ -1248,6 +1253,13 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	}
 
 	name = dev->desc->name;
+
+	if (name && !strcmp(name, "modem")) {
+		pr_warn("subsys-restart: ignoring restart request for %s on Wi-Fi tablet\n", name);
+		module_put(dev->owner);
+		put_device(&dev->dev);
+		return 0;
+	}
 
 	send_early_notifications(dev->early_notify);
 
@@ -1869,6 +1881,9 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 		ret = subsys_parse_devicetree(desc);
 		if (ret)
 			goto err_register;
+
+		if (desc->name && !strcmp(desc->name, "modem"))
+			desc->ignore_ssr_failure = true;
 
 		subsys->restart_order = update_restart_order(subsys);
 

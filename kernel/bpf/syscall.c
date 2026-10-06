@@ -50,11 +50,7 @@ int sysctl_unprivileged_bpf_disabled __read_mostly =
 static bool bpf_android_loader_task(void)
 {
 	return !strncmp(current->comm, "bpfloader", 9) ||
-	       !strncmp(current->comm, "netbpfload", 10) ||
-	       !strncmp(current->comm, "netd", 4) ||
-	       !strncmp(current->comm, "clatd", 5) ||
-	       !strcmp(current->comm, "system_server") ||
-	       !strcmp(current->comm, "init");
+	       !strncmp(current->comm, "netbpfload", 10);
 }
 
 static const struct bpf_map_ops * const bpf_map_types[] = {
@@ -96,7 +92,7 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 
 	if (attr->map_type >= ARRAY_SIZE(bpf_map_types) ||
 	    !bpf_map_types[attr->map_type]) {
-		if (bpf_map_types[BPF_MAP_TYPE_HASH])
+		if (bpf_android_loader_task() && bpf_map_types[BPF_MAP_TYPE_HASH])
 			attr->map_type = BPF_MAP_TYPE_HASH;
 		else
 			return ERR_PTR(-EINVAL);
@@ -1441,7 +1437,7 @@ static const struct bpf_verifier_ops * const bpf_prog_types[] = {
 static int find_prog_type(enum bpf_prog_type type, struct bpf_prog *prog)
 {
 	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type]) {
-		if (bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
+		if (bpf_android_loader_task() && bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
 			type = BPF_PROG_TYPE_SOCKET_FILTER;
 		else
 			return -EINVAL;
