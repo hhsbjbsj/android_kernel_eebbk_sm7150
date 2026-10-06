@@ -34,7 +34,10 @@ struct sdesc {
 static apk_sign_key_t apk_sign_keys[] = {
     { EXPECTED_SIZE_BAKASU, EXPECTED_HASH_BAKASU }, /* Baka-SU/BakaSU */
 #ifdef EXPECTED_SIZE
-    { EXPECTED_SIZE, EXPECTED_HASH }, // Custom
+    { EXPECTED_SIZE, EXPECTED_HASH }, // Custom (0x039a)
+#endif
+#ifdef EXPECTED_SIZE_CUSTOM_V1
+    { EXPECTED_SIZE_CUSTOM_V1, EXPECTED_HASH_CUSTOM_V1 }, // Custom (0x38b)
 #endif
 #ifdef CONFIG_KSU_MULTI_MANAGER_SUPPORT
     { EXPECTED_SIZE_OFFICIAL, EXPECTED_HASH_OFFICIAL }, // tiann/KernelSU

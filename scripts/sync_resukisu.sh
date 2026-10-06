@@ -287,14 +287,21 @@ if sign_h_path.exists():
 
 // Custom Manager (User Customized)
 #ifndef EXPECTED_SIZE
-#define EXPECTED_SIZE 0x38b
+#define EXPECTED_SIZE 0x039a
 #endif
 #ifndef EXPECTED_HASH
-#define EXPECTED_HASH "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+#define EXPECTED_HASH "366aa724f4ed84d589fb47077cee4dc6aac45c37c4a50a6e1eaed4446bb3bc03"
 #endif
 
-#define EXPECTED_SIZE_CUSTOM 0x38b
-#define EXPECTED_HASH_CUSTOM "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+#define EXPECTED_SIZE_CUSTOM 0x039a
+#define EXPECTED_HASH_CUSTOM "366aa724f4ed84d589fb47077cee4dc6aac45c37c4a50a6e1eaed4446bb3bc03"
+
+#ifndef EXPECTED_SIZE_CUSTOM_V1
+#define EXPECTED_SIZE_CUSTOM_V1 0x38b
+#endif
+#ifndef EXPECTED_HASH_CUSTOM_V1
+#define EXPECTED_HASH_CUSTOM_V1 "aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11"
+#endif
 """
     if "EXPECTED_SIZE_SUKISU" not in sign_h:
         guard_end = sign_h.rfind("#endif")
@@ -315,7 +322,8 @@ if apk_sign_c_path.exists():
     { EXPECTED_SIZE_RSUNTK, EXPECTED_HASH_RSUNTK }, // rsuntk/KernelSU
     { EXPECTED_SIZE_SUKISU, EXPECTED_HASH_SUKISU }, // SukiSU-Ultra/SukiSU-Ultra
     { EXPECTED_SIZE_KOWX712, EXPECTED_HASH_KOWX712 },
-    { EXPECTED_SIZE_CUSTOM, EXPECTED_HASH_CUSTOM }, // Custom Manager (User Customized)"""
+    { EXPECTED_SIZE_CUSTOM, EXPECTED_HASH_CUSTOM }, // Custom Manager (User Customized)
+    { EXPECTED_SIZE_CUSTOM_V1, EXPECTED_HASH_CUSTOM_V1 }, // Custom Manager V1 (0x38b)"""
     if old_keys_entry in apk_sign_c:
         apk_sign_c = apk_sign_c.replace(old_keys_entry, extra_keys_entry, 1)
         apk_sign_c_path.write_text(apk_sign_c, encoding="utf-8")
@@ -333,14 +341,14 @@ if uapi_h_path.exists():
 kbuild_path = Path("drivers/kernelsu/Kbuild")
 if kbuild_path.exists():
     kbuild = kbuild_path.read_text(encoding="utf-8")
-    if "KSU_EXPECTED_SIZE := 0x38b" not in kbuild:
+    if "KSU_EXPECTED_SIZE := 0x039a" not in kbuild:
         old_signs = "# Custom Signs\nifdef KSU_EXPECTED_SIZE"
         new_signs = """# Custom Signs
 ifndef KSU_EXPECTED_SIZE
-KSU_EXPECTED_SIZE := 0x38b
+KSU_EXPECTED_SIZE := 0x039a
 endif
 ifndef KSU_EXPECTED_HASH
-KSU_EXPECTED_HASH := aaf4f7590df8e55068503e29c58f7e9d5699f0c72bd31a7561cc36c0d044af11
+KSU_EXPECTED_HASH := 366aa724f4ed84d589fb47077cee4dc6aac45c37c4a50a6e1eaed4446bb3bc03
 endif
 
 ifdef KSU_EXPECTED_SIZE"""
