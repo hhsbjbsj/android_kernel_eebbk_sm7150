@@ -502,7 +502,7 @@ static void do_epoch_check(struct subsys_device *dev)
 	if (time_first && n >= max_restarts_check) {
 		if ((curr_time->tv_sec - time_first->tv_sec) <
 				max_history_time_check)
-			panic("Subsystems have crashed %d times in less than %ld seconds!",
+			pr_err("Subsystems have crashed %d times in less than %ld seconds!\n",
 				max_restarts_check, max_history_time_check);
 	}
 
@@ -1212,7 +1212,7 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 			__pm_stay_awake(&dev->ssr_wlock);
 			queue_work(ssr_wq, &dev->work);
 		} else {
-			panic("Subsystem %s crashed during SSR!", name);
+			pr_err("Subsystem %s crashed during SSR!\n", name);
 		}
 	} else
 		WARN(dev->track.state == SUBSYS_OFFLINE,
@@ -1225,19 +1225,9 @@ static void device_restart_work_hdlr(struct work_struct *work)
 	struct subsys_device *dev = container_of(work, struct subsys_device,
 							device_restart_work);
 
-	if (dev->desc && dev->desc->name && !strcmp(dev->desc->name, "modem")) {
-		pr_warn("subsys-restart: ignoring SoC reset for modem on Wi-Fi tablet\n");
-		return;
-	}
-
-	notify_each_subsys_device(&dev, 1, SUBSYS_SOC_RESET, NULL);
-	/*
-	 * Temporary workaround until ramdump userspace application calls
-	 * sync() and fclose() on attempting the dump.
-	 */
-	msleep(100);
-	panic("subsys-restart: Resetting the SoC - %s crashed.",
-							dev->desc->name);
+	pr_warn("subsys-restart: ignoring SoC reset for %s to prevent sudden reboot\n",
+		(dev->desc && dev->desc->name) ? dev->desc->name : "subsys");
+	return;
 }
 
 int subsystem_restart_dev(struct subsys_device *dev)
@@ -1846,6 +1836,8 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 
 	subsys->notify = subsys_notif_add_subsys(desc->name);
 	subsys->early_notify = subsys_get_early_notif_info(desc->name);
+	subsys->restart_level = RESET_SUBSYS_COUPLED;
+	desc->ignore_ssr_failure = true;
 
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wakeup_source_init(&subsys->ssr_wlock, subsys->wlname);

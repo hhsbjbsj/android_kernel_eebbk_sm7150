@@ -6255,6 +6255,21 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
 			error = security_context_to_sid_force(
 						      &selinux_state,
 						      value, size, &sid);
+		} else if (error == -EINVAL && !strcmp(name, "exec")) {
+			/*
+			 * In Android GSI / newer ROM environments, init rc scripts may declare
+			 * services with seclabels that do not exist in the loaded policy
+			 * (e.g. u:r:misight:s0, u:r:audioshell_system:s0, etc.).
+			 * Instead of returning -EINVAL which causes init to PLOG(FATAL) and abort,
+			 * force-allocate a SID or fallback to kernel SID so the process
+			 * can execute without crashlooping and triggering RescueParty reboots.
+			 */
+			error = security_context_to_sid_force(&selinux_state,
+							      value, size, &sid);
+			if (error) {
+				sid = SECINITSID_KERNEL;
+				error = 0;
+			}
 		}
 		if (error)
 			return error;
