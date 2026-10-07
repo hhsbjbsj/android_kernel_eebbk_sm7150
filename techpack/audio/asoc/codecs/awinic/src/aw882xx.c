@@ -47,6 +47,7 @@ static unsigned int g_algo_copp_en = true;
 
 static DEFINE_MUTEX(g_aw882xx_lock);
 struct aw_container *g_awinic_cfg = NULL;
+static int aw882xx_request_firmware_file(struct aw882xx *aw882xx);
 
 static const char *const aw882xx_switch[] = {"Disable", "Enable"};
 #ifdef AW_SPIN_ENABLE
