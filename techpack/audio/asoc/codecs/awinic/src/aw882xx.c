@@ -341,7 +341,9 @@ static void aw882xx_shutdown(struct snd_pcm_substream *substream,
 static void aw882xx_start(struct aw882xx *aw882xx)
 {
 	if (aw882xx->fw_status == AW_DEV_FW_FAILED) {
-		aw_dev_info(aw882xx->dev, "fw_load failed ,can not start PA");
+		aw_dev_info(aw882xx->dev, "fw_status failed, retry requesting fw [%s]",
+			    aw882xx->aw_pa->acf_name);
+		aw882xx_request_firmware_file(aw882xx);
 		return;
 	}
 	mutex_lock(&aw882xx->lock);
@@ -621,35 +623,30 @@ static void aw882xx_firmware_acf_loaded(const struct firmware *cont, void *conte
 	aw_dev_info(aw882xx->dev, "load [%s] , file size: [%zu]",
 			aw882xx->aw_pa->acf_name, cont ? cont->size : 0);
 
-	mutex_lock(&g_aw882xx_lock);
-	if (g_awinic_cfg == NULL) {
-		aw_cfg = kzalloc(cont->size + sizeof(int), GFP_KERNEL);
-		if (aw_cfg == NULL) {
-			release_firmware(cont);
-			mutex_unlock(&g_aw882xx_lock);
-			aw_dev_err(aw882xx->dev, "malloc failed");
-			return;
-		}
-		aw_cfg->len = cont->size;
-		memcpy(aw_cfg->data, cont->data, cont->size);
+	aw_cfg = kzalloc(cont->size + sizeof(int), GFP_KERNEL);
+	if (aw_cfg == NULL) {
 		release_firmware(cont);
-		ret = aw_dev_load_acf_check(aw_cfg);
-		if (ret) {
-			aw_dev_err(aw882xx->dev, "Load [%s] failed ....!", aw882xx->aw_pa->acf_name);
-			kfree(aw_cfg);
-			aw_cfg = NULL;
-			mutex_unlock(&g_aw882xx_lock);
-			return;
-		}
-		g_awinic_cfg = aw_cfg;
-	} else {
-		aw_cfg = g_awinic_cfg;
-		release_firmware(cont);
-		aw_dev_info(aw882xx->dev, "[%s] already loaded...", aw882xx->aw_pa->acf_name);
+		aw_dev_err(aw882xx->dev, "malloc failed");
+		return;
 	}
-	mutex_unlock(&g_aw882xx_lock);
+	aw_cfg->len = cont->size;
+	memcpy(aw_cfg->data, cont->data, cont->size);
+	release_firmware(cont);
+
+	ret = aw_dev_load_acf_check(aw_cfg);
+	if (ret) {
+		aw_dev_err(aw882xx->dev, "Load [%s] failed ....!", aw882xx->aw_pa->acf_name);
+		kfree(aw_cfg);
+		return;
+	}
 
 	mutex_lock(&aw882xx->lock);
+	if (aw882xx->aw_cfg) {
+		kfree(aw882xx->aw_cfg);
+		aw882xx->aw_cfg = NULL;
+	}
+	aw882xx->aw_cfg = aw_cfg;
+
 	//aw device init
 	ret = aw_device_init(aw882xx->aw_pa, aw_cfg);
 	if (ret < 0) {
@@ -662,6 +659,7 @@ static void aw882xx_firmware_acf_loaded(const struct firmware *cont, void *conte
 	aw882xx_dynamic_create_controls(aw882xx);
 
 	aw882xx->fw_status = AW_DEV_FW_OK;
+	aw_dev_info(aw882xx->dev, "Load [%s] success!", aw882xx->aw_pa->acf_name);
 
 	mutex_unlock(&aw882xx->lock);
 }
@@ -1859,6 +1857,10 @@ static int aw882xx_i2c_remove(struct i2c_client *i2c)
 	sysfs_remove_group(&i2c->dev.kobj, &aw882xx_attribute_group);
 
 	/*free device resource */
+	if (aw882xx->aw_cfg) {
+		kfree(aw882xx->aw_cfg);
+		aw882xx->aw_cfg = NULL;
+	}
 	aw_device_remove(aw882xx->aw_pa);
 
 	/*unregister codec*/

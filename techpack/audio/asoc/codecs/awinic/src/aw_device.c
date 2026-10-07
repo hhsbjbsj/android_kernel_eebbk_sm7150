@@ -133,22 +133,27 @@ int aw_dev_load_acf_check(struct aw_container *aw_cfg)
 {
 	struct aw_cfg_hdr *cfg_hdr = NULL;
 
-	if (aw_cfg == NULL) {
-		aw_pr_err("aw_prof is NULL");
-		return -ENOMEM;
-	}
-
-	cfg_hdr = (struct aw_cfg_hdr *)aw_cfg->data;
-	switch (cfg_hdr->a_hdr_version) {
-	case AW_CFG_HDR_VER_0_0_0_1:
-		return aw_dev_check_cfg_by_hdr(aw_cfg);
-		break;
-	default:
-		aw_pr_err("unsupported hdr_version [0x%x]", cfg_hdr->a_hdr_version);
+	if (aw_cfg == NULL || aw_cfg->len <= 0) {
+		aw_pr_err("aw_cfg is NULL or empty");
 		return -EINVAL;
 	}
 
-	return 0;
+	if (aw_cfg->len >= sizeof(struct aw_cfg_hdr)) {
+		cfg_hdr = (struct aw_cfg_hdr *)aw_cfg->data;
+		if (cfg_hdr->a_id == ACF_FILE_ID &&
+		    cfg_hdr->a_hdr_version == AW_CFG_HDR_VER_0_0_0_1) {
+			return aw_dev_check_cfg_by_hdr(aw_cfg);
+		}
+	}
+
+	/* Fallback: raw register binary array (addr-value uint16 pairs, 4 bytes each) */
+	if (aw_cfg->len % 4 == 0) {
+		aw_pr_info("raw reg bin detected, file size: %d", aw_cfg->len);
+		return 0;
+	}
+
+	aw_pr_err("unsupported fw format or corrupted, size: %d", aw_cfg->len);
+	return -EINVAL;
 }
 
 
@@ -161,6 +166,20 @@ static int aw_dev_parse_raw_reg(struct aw_device *aw_dev,
 	prof_desc->sec_desc[AW_PROFILE_DATA_TYPE_REG].len = data_len;
 
 	prof_desc->prof_st = AW_PROFILE_OK;
+
+	return 0;
+}
+
+static int aw_dev_load_raw_reg(struct aw_device *aw_dev,
+		struct aw_container *aw_cfg, struct aw_all_prof_info *all_prof_info)
+{
+	int i;
+
+	aw_dev_info(aw_dev->dev, "loading raw reg bin data, size: %d", aw_cfg->len);
+	for (i = 0; i < AW_PROFILE_MAX; i++) {
+		aw_dev_parse_raw_reg(aw_dev, aw_cfg->data, aw_cfg->len,
+				     &all_prof_info->prof_desc[i]);
+	}
 
 	return 0;
 }
@@ -374,9 +393,15 @@ static int aw_dev_cfg_get_vaild_prof(struct aw_device *aw_dev,
 				struct aw_all_prof_info all_prof_info)
 {
 	int i;
-	int num =0;
+	int num = 0;
 	struct aw_prof_desc *prof_desc = all_prof_info.prof_desc;
 	struct aw_prof_info *prof_info = &aw_dev->prof_info;
+
+	if (prof_info->prof_desc != NULL) {
+		kfree(prof_info->prof_desc);
+		prof_info->prof_desc = NULL;
+	}
+	aw_dev->prof_info.count = 0;
 
 	for (i = 0; i < AW_PROFILE_MAX; i++) {
 		if (prof_desc[i].prof_st == AW_PROFILE_OK)
@@ -421,21 +446,37 @@ static int aw_dev_cfg_load(struct aw_device *aw_dev, struct aw_container *aw_cfg
 	aw_dev_info(aw_dev->dev, "enter");
 	memset(&all_prof_info, 0, sizeof(struct aw_all_prof_info));
 
-	cfg_hdr = (struct aw_cfg_hdr *)aw_cfg->data;
-	switch (cfg_hdr->a_hdr_version) {
-	case AW_CFG_HDR_VER_0_0_0_1:
-		ret = aw_dev_acf_load_by_hdr(aw_dev, cfg_hdr, &all_prof_info);
-		if (ret < 0) {
-			aw_dev_err(aw_dev->dev, "hdr_cersion[0x%x] parse failed",
-						cfg_hdr->a_hdr_version);
-			return ret;
-		}
-		break;
-	default:
-		aw_pr_err("unsupported hdr_version [0x%x]", cfg_hdr->a_hdr_version);
+	if (aw_cfg == NULL || aw_cfg->len <= 0) {
+		aw_dev_err(aw_dev->dev, "aw_cfg is NULL or empty");
 		return -EINVAL;
 	}
 
+	if (aw_cfg->len >= sizeof(struct aw_cfg_hdr)) {
+		cfg_hdr = (struct aw_cfg_hdr *)aw_cfg->data;
+		if (cfg_hdr->a_id == ACF_FILE_ID &&
+		    cfg_hdr->a_hdr_version == AW_CFG_HDR_VER_0_0_0_1) {
+			ret = aw_dev_acf_load_by_hdr(aw_dev, cfg_hdr, &all_prof_info);
+			if (ret < 0) {
+				aw_dev_err(aw_dev->dev, "hdr_version[0x%x] parse failed",
+							cfg_hdr->a_hdr_version);
+				return ret;
+			}
+			goto get_prof;
+		}
+	}
+
+	if (aw_cfg->len % 4 == 0) {
+		ret = aw_dev_load_raw_reg(aw_dev, aw_cfg, &all_prof_info);
+		if (ret < 0) {
+			aw_dev_err(aw_dev->dev, "load raw reg failed");
+			return ret;
+		}
+	} else {
+		aw_dev_err(aw_dev->dev, "unsupported fw format, size [%d]", aw_cfg->len);
+		return -EINVAL;
+	}
+
+get_prof:
 	ret = aw_dev_cfg_get_vaild_prof(aw_dev, all_prof_info);
 	if (ret < 0)
 		return ret;
@@ -538,7 +579,7 @@ static int aw_dev_reg_fw_update(struct aw_device *aw_dev)
 	unsigned int init_volume = 0;
 	struct aw_int_desc *int_desc = &aw_dev->int_desc;
 	struct aw_sec_data_desc *reg_data;
-	int16_t *data;
+	uint16_t *data;
 	int data_len;
 
 	char *prof_name = aw_dev_get_prof_name(aw_dev, aw_dev->set_prof);
@@ -553,7 +594,7 @@ static int aw_dev_reg_fw_update(struct aw_device *aw_dev)
 		return -EINVAL;
 	}
 
-	data = (int16_t *)reg_data->data;
+	data = (uint16_t *)reg_data->data;
 	data_len = reg_data->len >> 1;
 
 	for (i = 0; i < data_len; i += 2) {
@@ -1213,8 +1254,24 @@ static int aw_device_parse_dt(struct aw_device *aw_dev)
 {
 	int ret;
 	uint32_t channel_value;
+	const char *ch_str = NULL;
 
 	aw_dev->channel = AW_DEV_CH_PRI_L;
+
+	ret = of_property_read_string(aw_dev->dev->of_node, "sound-channel", &ch_str);
+	if (ret == 0 && ch_str) {
+		if (!strcmp(ch_str, "left") || !strcmp(ch_str, "pri-left"))
+			aw_dev->channel = AW_DEV_CH_PRI_L;
+		else if (!strcmp(ch_str, "right") || !strcmp(ch_str, "pri-right"))
+			aw_dev->channel = AW_DEV_CH_PRI_R;
+		else if (!strcmp(ch_str, "sec-left"))
+			aw_dev->channel = AW_DEV_CH_SEC_L;
+		else if (!strcmp(ch_str, "sec-right"))
+			aw_dev->channel = AW_DEV_CH_SEC_R;
+		aw_dev_info(aw_dev->dev, "sound-channel set to %s (%d)", ch_str, aw_dev->channel);
+		return 0;
+	}
+
 	ret = of_property_read_u32(aw_dev->dev->of_node, "sound-channel", &channel_value);
 	if (ret < 0) {
 		aw_dev_info(aw_dev->dev, "read sound-channel failed,use default");

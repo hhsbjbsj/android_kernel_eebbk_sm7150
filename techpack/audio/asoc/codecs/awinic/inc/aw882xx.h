@@ -117,6 +117,7 @@ struct aw882xx {
 	struct device *dev;
 	struct aw882xx_i2c_packet i2c_packet;
 	struct aw_device *aw_pa;
+	struct aw_container *aw_cfg;
 
 	struct workqueue_struct *work_queue;
 	struct delayed_work start_work;
