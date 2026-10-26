@@ -90,6 +90,8 @@ struct bpf_sk_storage {
 static struct bucket *select_bucket(struct bpf_sk_storage_map *smap,
 				    struct bpf_sk_storage_elem *selem)
 {
+	if (unlikely(!smap || !smap->buckets))
+		return NULL;
 	return &smap->buckets[hash_ptr(selem, smap->bucket_log)];
 }
 
@@ -155,16 +157,18 @@ static bool __selem_unlink_sk(struct bpf_sk_storage *sk_storage,
 	/* All uncharging on sk->sk_omem_alloc must be done first.
 	 * sk may be freed once the last selem is unlinked from sk_storage.
 	 */
-	if (uncharge_omem)
+	if (uncharge_omem && smap && sk)
 		atomic_sub(smap->elem_size, &sk->sk_omem_alloc);
 
 	free_sk_storage = hlist_is_singular_node(&selem->snode,
 						 &sk_storage->list);
 	if (free_sk_storage) {
-		atomic_sub(sizeof(struct bpf_sk_storage), &sk->sk_omem_alloc);
+		if (sk) {
+			atomic_sub(sizeof(struct bpf_sk_storage), &sk->sk_omem_alloc);
+			/* After this RCU_INIT, sk may be freed and cannot be used */
+			RCU_INIT_POINTER(sk->sk_bpf_storage, NULL);
+		}
 		sk_storage->sk = NULL;
-		/* After this RCU_INIT, sk may be freed and cannot be used */
-		RCU_INIT_POINTER(sk->sk_bpf_storage, NULL);
 
 		/* sk_storage is not freed now.  sk_storage->lock is
 		 * still held and raw_spin_unlock_bh(&sk_storage->lock)
@@ -181,7 +185,7 @@ static bool __selem_unlink_sk(struct bpf_sk_storage *sk_storage,
 		 */
 	}
 	hlist_del_init_rcu(&selem->snode);
-	if (rcu_access_pointer(sk_storage->cache[smap->cache_idx]) ==
+	if (smap && rcu_access_pointer(sk_storage->cache[smap->cache_idx]) ==
 	    SDATA(selem))
 		RCU_INIT_POINTER(sk_storage->cache[smap->cache_idx], NULL);
 
@@ -200,6 +204,9 @@ static void selem_unlink_sk(struct bpf_sk_storage_elem *selem)
 		return;
 
 	sk_storage = rcu_dereference(selem->sk_storage);
+	if (unlikely(!sk_storage))
+		return;
+
 	raw_spin_lock_bh(&sk_storage->lock);
 	if (likely(selem_linked_to_sk(selem)))
 		free_sk_storage = __selem_unlink_sk(sk_storage, selem, true);
@@ -227,7 +234,13 @@ static void selem_unlink_map(struct bpf_sk_storage_elem *selem)
 		return;
 
 	smap = rcu_dereference(SDATA(selem)->smap);
+	if (unlikely(!smap))
+		return;
+
 	b = select_bucket(smap, selem);
+	if (unlikely(!b))
+		return;
+
 	raw_spin_lock_bh(&b->lock);
 	if (likely(selem_linked_to_map(selem)))
 		hlist_del_init_rcu(&selem->map_node);
@@ -237,7 +250,14 @@ static void selem_unlink_map(struct bpf_sk_storage_elem *selem)
 static void selem_link_map(struct bpf_sk_storage_map *smap,
 			   struct bpf_sk_storage_elem *selem)
 {
-	struct bucket *b = select_bucket(smap, selem);
+	struct bucket *b;
+
+	if (unlikely(!smap))
+		return;
+
+	b = select_bucket(smap, selem);
+	if (unlikely(!b))
+		return;
 
 	raw_spin_lock_bh(&b->lock);
 	RCU_INIT_POINTER(SDATA(selem)->smap, smap);
@@ -516,6 +536,9 @@ void bpf_sk_storage_free(struct sock *sk)
 	struct bpf_sk_storage *sk_storage;
 	bool free_sk_storage = false;
 	struct hlist_node *n;
+
+	if (unlikely(!sk))
+		return;
 
 	rcu_read_lock();
 	sk_storage = rcu_dereference(sk->sk_bpf_storage);
