@@ -47,31 +47,6 @@ static DEFINE_SPINLOCK(map_idr_lock);
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 
-static bool bpf_is_privileged_task(void)
-{
-	uid_t uid = current_uid().val;
-
-	/* Root (UID 0) and System (UID 1000, AID_SYSTEM / system_server) */
-	if (uid == 0 || uid == 1000)
-		return true;
-
-	/* Admin capabilities */
-	if (capable(CAP_SYS_ADMIN) || capable(CAP_NET_ADMIN))
-		return true;
-
-	/* Android system daemons and Zygote-spawned threads */
-	if (!strncmp(current->comm, "bpfloader", 9) ||
-	    !strncmp(current->comm, "netbpfload", 10) ||
-	    !strncmp(current->comm, "netd", 4) ||
-	    !strncmp(current->comm, "clatd", 5) ||
-	    !strcmp(current->comm, "system_server") ||
-	    !strcmp(current->comm, "main") ||
-	    !strncmp(current->comm, "init", 4))
-		return true;
-
-	return false;
-}
-
 static const struct bpf_map_ops * const bpf_map_types[] = {
 #define BPF_PROG_TYPE(_id, _ops)
 #define BPF_MAP_TYPE(_id, _ops) \
@@ -94,11 +69,30 @@ static int check_uarg_tail_zero(void __user *uaddr,
 				size_t expected_size,
 				size_t actual_size)
 {
+	unsigned char __user *addr;
+	unsigned char __user *end;
+	unsigned char val;
+	int err;
+
 	if (unlikely(actual_size > PAGE_SIZE))	/* silly large */
 		return -E2BIG;
 
 	if (unlikely(!access_ok(VERIFY_READ, uaddr, actual_size)))
 		return -EFAULT;
+
+	if (actual_size <= expected_size)
+		return 0;
+
+	addr = uaddr + expected_size;
+	end  = uaddr + actual_size;
+
+	for (; addr < end; addr++) {
+		err = get_user(val, addr);
+		if (err)
+			return err;
+		if (val)
+			return -E2BIG;
+	}
 
 	return 0;
 }
@@ -110,12 +104,8 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	int err;
 
 	if (attr->map_type >= ARRAY_SIZE(bpf_map_types) ||
-	    !bpf_map_types[attr->map_type]) {
-		if (bpf_is_privileged_task() && bpf_map_types[BPF_MAP_TYPE_HASH])
-			attr->map_type = BPF_MAP_TYPE_HASH;
-		else
-			return ERR_PTR(-EINVAL);
-	}
+	    !bpf_map_types[attr->map_type])
+		return ERR_PTR(-EINVAL);
 
 	ops = bpf_map_types[attr->map_type];
 	if (ops->map_alloc_check) {
@@ -179,11 +169,6 @@ int bpf_map_precharge_memlock(u32 pages)
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit, cur;
 
-	if (bpf_is_privileged_task()) {
-		free_uid(user);
-		return 0;
-	}
-
 	memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	cur = atomic_long_read(&user->locked_vm);
 	free_uid(user);
@@ -196,11 +181,6 @@ static int bpf_map_charge_memlock(struct bpf_map *map)
 {
 	struct user_struct *user = get_current_user();
 	unsigned long memlock_limit;
-
-	if (bpf_is_privileged_task()) {
-		map->user = user;
-		return 0;
-	}
 
 	memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 
@@ -495,7 +475,12 @@ int bpf_get_file_flag(int flags)
 }
 
 /* helper macro to check that unused fields 'union bpf_attr' are zero */
-#define CHECK_ATTR(CMD) 0
+#define CHECK_ATTR(CMD) \
+	memchr_inv((void *) &attr->CMD##_LAST_FIELD + \
+		   sizeof(attr->CMD##_LAST_FIELD), 0, \
+		   sizeof(*attr) - \
+		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
+		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
 
 /* dst and src must have at least BPF_OBJ_NAME_LEN number of bytes.
  * Return 0 on success and < 0 on error.
@@ -576,11 +561,11 @@ static int map_create(union bpf_attr *attr)
 	err = CHECK_ATTR(BPF_MAP_CREATE);
 	if (err)
 		return -EINVAL;
-	/* Hardware offload and struct_ops not supported in this 4.14 kernel */
-	attr->map_ifindex = 0;
-	attr->btf_vmlinux_value_type_id = 0;
+	/* This kernel has no BPF hardware offload or struct_ops support. */
+	if (attr->map_ifindex || attr->btf_vmlinux_value_type_id)
+		return -EINVAL;
 	if (attr->btf_key_type_id && !attr->btf_value_type_id)
-		attr->btf_key_type_id = 0;
+		return -EINVAL;
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
 	if (f_flags < 0)
@@ -609,17 +594,19 @@ static int map_create(union bpf_attr *attr)
 		struct btf *btf;
 
 		btf = btf_get_by_fd(attr->btf_fd);
-		if (!IS_ERR(btf)) {
-			err = map_check_btf(map, btf, attr->btf_key_type_id,
-					    attr->btf_value_type_id);
-			if (!err) {
-				map->btf = btf;
-				map->btf_key_type_id = attr->btf_key_type_id;
-				map->btf_value_type_id = attr->btf_value_type_id;
-			} else {
-				btf_put(btf);
-			}
+		if (IS_ERR(btf)) {
+			err = PTR_ERR(btf);
+			goto free_map_nouncharge;
 		}
+		map->btf = btf;
+
+		err = map_check_btf(map, btf, attr->btf_key_type_id,
+				    attr->btf_value_type_id);
+		if (err)
+			goto free_map_nouncharge;
+
+		map->btf_key_type_id = attr->btf_key_type_id;
+		map->btf_value_type_id = attr->btf_value_type_id;
 	}
 
 	err = security_bpf_map_alloc(map);
@@ -1455,12 +1442,8 @@ static const struct bpf_verifier_ops * const bpf_prog_types[] = {
 
 static int find_prog_type(enum bpf_prog_type type, struct bpf_prog *prog)
 {
-	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type]) {
-		if (bpf_is_privileged_task() && bpf_prog_types[BPF_PROG_TYPE_SOCKET_FILTER])
-			type = BPF_PROG_TYPE_SOCKET_FILTER;
-		else
-			return -EINVAL;
-	}
+	if (type >= ARRAY_SIZE(bpf_prog_types) || !bpf_prog_types[type])
+		return -EINVAL;
 
 	if (!bpf_prog_is_dev_bound(prog->aux))
 		prog->aux->ops = bpf_prog_types[type];
@@ -1486,9 +1469,6 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 	unsigned long memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	unsigned long user_bufs;
 
-	if (bpf_is_privileged_task())
-		return 0;
-
 	if (user) {
 		user_bufs = atomic_long_add_return(pages, &user->locked_vm);
 		if (user_bufs > memlock_limit) {
@@ -1502,9 +1482,6 @@ int __bpf_prog_charge(struct user_struct *user, u32 pages)
 
 void __bpf_prog_uncharge(struct user_struct *user, u32 pages)
 {
-	if (bpf_is_privileged_task())
-		return;
-
 	if (user)
 		atomic_long_sub(pages, &user->locked_vm);
 }
@@ -1820,9 +1797,26 @@ static int bpf_prog_attach_check_attach_type(const struct bpf_prog *prog,
 
 #define BPF_ANDROID_COMPAT_KERN_VERSION ((5U << 24) | (10U << 16) | 199U)
 
+static bool bpf_android_loader_task(void)
+{
+	return !strncmp(current->comm, "bpfloader", 9) ||
+	       !strncmp(current->comm, "netbpfload", 10) ||
+	       !strncmp(current->comm, "netd", 4);
+}
+
+static bool bpf_capable(void)
+{
+	return capable(CAP_SYS_ADMIN) || capable(CAP_NET_ADMIN) ||
+	       current_uid().val == 1000 || bpf_android_loader_task();
+}
+
 static bool bpf_kprobe_kern_version_ok(u32 kern_version)
 {
-	return true;
+	if (kern_version == LINUX_VERSION_CODE)
+		return true;
+
+	return bpf_android_loader_task() &&
+	       kern_version == BPF_ANDROID_COMPAT_KERN_VERSION;
 }
 
 /* last field in 'union bpf_attr' used by this command */
@@ -1839,8 +1833,8 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
 
-	attr->prog_flags &= BPF_F_STRICT_ALIGNMENT;
-	attr->prog_ifindex = 0;
+	if (attr->prog_flags & ~BPF_F_STRICT_ALIGNMENT)
+		return -EINVAL;
 
 	/* copy eBPF program license from user space */
 	if (strncpy_from_user(license, u64_to_user_ptr(attr->license),
@@ -1860,12 +1854,12 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER &&
 	    type != BPF_PROG_TYPE_CGROUP_SKB &&
-	    !bpf_is_privileged_task())
+	    !bpf_capable())
 		return -EPERM;
 
 	bpf_prog_load_fixup_attach_type(attr);
 	if (bpf_prog_load_check_attach_type(type, attr->expected_attach_type))
-		attr->expected_attach_type = 0;
+		return -EINVAL;
 
 	/* plain bpf_prog allocation */
 	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
@@ -1913,82 +1907,8 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	/* run eBPF verifier */
 	err = bpf_check(&prog, attr, uattr);
-	if (err < 0) {
-		if (bpf_is_privileged_task()) {
-			int ret_val = 0;
-			struct bpf_insn dummy_insns[2];
-			struct bpf_prog *dummy_prog;
-			union bpf_attr dummy_attr;
-
-			if (type == BPF_PROG_TYPE_CGROUP_SKB ||
-			    type == BPF_PROG_TYPE_CGROUP_SOCK ||
-			    type == BPF_PROG_TYPE_CGROUP_SOCK_ADDR ||
-			    type == BPF_PROG_TYPE_SOCK_OPS) {
-				ret_val = 1;
-			} else if (type == BPF_PROG_TYPE_SOCKET_FILTER) {
-				ret_val = -1;
-			} else {
-				ret_val = 0;
-			}
-
-			dummy_insns[0] = BPF_MOV64_IMM(BPF_REG_0, ret_val);
-			dummy_insns[1] = BPF_EXIT_INSN();
-
-			pr_warn("bpf_prog_load: prog '%s' (type %d) verification failed (%d), creating dummy pass-through (ret %d) for %s\n",
-				attr->prog_name, type, err, ret_val, current->comm);
-
-			btf_put(prog->aux->btf);
-			prog->aux->btf = NULL;
-			kvfree(prog->aux->linfo);
-			prog->aux->linfo = NULL;
-			free_used_maps(prog->aux);
-			bpf_prog_uncharge_memlock(prog);
-			security_bpf_prog_free(prog->aux);
-			bpf_prog_free(prog);
-			prog = NULL;
-
-			dummy_prog = bpf_prog_alloc(bpf_prog_size(ARRAY_SIZE(dummy_insns)), GFP_USER);
-			if (!dummy_prog)
-				return -ENOMEM;
-
-			dummy_prog->expected_attach_type = 0;
-			err = security_bpf_prog_alloc(dummy_prog->aux);
-			if (err) {
-				bpf_prog_free(dummy_prog);
-				return err;
-			}
-			err = bpf_prog_charge_memlock(dummy_prog);
-			if (err) {
-				security_bpf_prog_free(dummy_prog->aux);
-				bpf_prog_free(dummy_prog);
-				return err;
-			}
-			dummy_prog->len = ARRAY_SIZE(dummy_insns);
-			memcpy(dummy_prog->insns, dummy_insns, sizeof(dummy_insns));
-			dummy_prog->orig_prog = NULL;
-			dummy_prog->jited = 0;
-			atomic_set(&dummy_prog->aux->refcnt, 1);
-			dummy_prog->gpl_compatible = 1;
-
-			find_prog_type(type, dummy_prog);
-			dummy_prog->aux->load_time = ktime_get_boot_ns();
-			bpf_obj_name_cpy(dummy_prog->aux->name, attr->prog_name);
-
-			memset(&dummy_attr, 0, sizeof(dummy_attr));
-			dummy_attr.prog_type = dummy_prog->type;
-			dummy_attr.insn_cnt = ARRAY_SIZE(dummy_insns);
-
-			err = bpf_check(&dummy_prog, &dummy_attr, NULL);
-			if (err < 0) {
-				pr_err("bpf_prog_load: dummy prog verification failed (%d)\n", err);
-				prog = dummy_prog;
-				goto free_used_maps;
-			}
-			prog = dummy_prog;
-		} else {
-			goto free_used_maps;
-		}
-	}
+	if (err < 0)
+		goto free_used_maps;
 
 	/* eBPF program is ready to be JITed */
 	prog = bpf_prog_select_runtime(prog, &err);
@@ -2040,7 +1960,7 @@ free_prog_nouncharge:
 
 static int bpf_obj_pin(const union bpf_attr *attr)
 {
-	if (CHECK_ATTR(BPF_OBJ))
+	if (CHECK_ATTR(BPF_OBJ) || attr->file_flags != 0)
 		return -EINVAL;
 
 	return bpf_obj_pin_user(attr->bpf_fd, u64_to_user_ptr(attr->pathname));
@@ -2048,11 +1968,12 @@ static int bpf_obj_pin(const union bpf_attr *attr)
 
 static int bpf_obj_get(const union bpf_attr *attr)
 {
-	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0)
+	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0 ||
+	    attr->file_flags & ~BPF_OBJ_FLAG_MASK)
 		return -EINVAL;
 
 	return bpf_obj_get_user(u64_to_user_ptr(attr->pathname),
-				attr->file_flags & BPF_OBJ_FLAG_MASK);
+				attr->file_flags);
 }
 
 struct bpf_raw_tracepoint {
@@ -2689,7 +2610,7 @@ static int bpf_btf_load(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_BTF_LOAD))
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!bpf_capable())
 		return -EPERM;
 
 	return btf_new_fd(attr);
@@ -2727,7 +2648,7 @@ static int map_freeze(const union bpf_attr *attr)
 		err = -EBUSY;
 		goto out;
 	}
-	if (!capable(CAP_SYS_ADMIN)) {
+	if (!bpf_capable()) {
 		err = -EPERM;
 		goto out;
 	}
@@ -2801,7 +2722,7 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	union bpf_attr attr;
 	int err;
 
-	if (sysctl_unprivileged_bpf_disabled && !bpf_is_privileged_task())
+	if (sysctl_unprivileged_bpf_disabled && !bpf_capable())
 		return -EPERM;
 
 	err = check_uarg_tail_zero(uattr, sizeof(attr), size);
