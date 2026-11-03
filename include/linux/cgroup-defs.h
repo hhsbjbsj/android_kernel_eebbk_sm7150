@@ -772,6 +772,7 @@ static inline void sock_cgroup_set_prioidx(struct sock_cgroup_data *skcd,
 	if (!(skcd_buf.is_data & 1)) {
 		skcd_buf.val = 0;
 		skcd_buf.is_data = 1;
+		skcd_buf.no_refcnt = 1;
 	}
 
 	skcd_buf.prioidx = prioidx;
@@ -789,6 +790,7 @@ static inline void sock_cgroup_set_classid(struct sock_cgroup_data *skcd,
 	if (!(skcd_buf.is_data & 1)) {
 		skcd_buf.val = 0;
 		skcd_buf.is_data = 1;
+		skcd_buf.no_refcnt = 1;
 	}
 
 	skcd_buf.classid = classid;

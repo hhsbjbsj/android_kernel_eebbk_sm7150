@@ -6136,8 +6136,10 @@ void cgroup_sk_alloc(struct sock_cgroup_data *skcd)
 	}
 
 	/* Don't associate the sock with unrelated interrupted task's cgroup. */
-	if (in_interrupt())
+	if (in_interrupt()) {
+		skcd->no_refcnt = 1;
 		return;
+	}
 
 	rcu_read_lock();
 
@@ -6159,6 +6161,8 @@ void cgroup_sk_clone(struct sock_cgroup_data *skcd)
 {
 	/* Socket clone path */
 	if (skcd->val) {
+		if (skcd->no_refcnt || skcd->is_data)
+			return;
 		/*
 		 * We might be cloning a socket which is left in an empty
 		 * cgroup and the cgroup might have already been rmdir'd.
@@ -6170,10 +6174,19 @@ void cgroup_sk_clone(struct sock_cgroup_data *skcd)
 
 void cgroup_sk_free(struct sock_cgroup_data *skcd)
 {
-	if (skcd->no_refcnt)
+	struct cgroup *cgrp;
+
+	if (!skcd || skcd->no_refcnt || skcd->is_data || !skcd->val)
 		return;
 
-	cgroup_put(sock_cgroup_ptr(skcd));
+	cgrp = sock_cgroup_ptr(skcd);
+	skcd->val = 0;
+	skcd->no_refcnt = 1;
+
+	if (!cgrp || cgrp == &cgrp_dfl_root.cgrp)
+		return;
+
+	cgroup_put(cgrp);
 }
 
 #endif	/* CONFIG_SOCK_CGROUP_DATA */
