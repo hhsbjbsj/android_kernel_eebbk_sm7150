@@ -1812,11 +1812,13 @@ static bool bpf_capable(void)
 
 static bool bpf_kprobe_kern_version_ok(u32 kern_version)
 {
-	if (kern_version == LINUX_VERSION_CODE)
-		return true;
-
-	return bpf_android_loader_task() &&
-	       kern_version == BPF_ANDROID_COMPAT_KERN_VERSION;
+	/*
+	 * Linux 5.0+ (c710b72452db) ignores kern_version for kprobe programs.
+	 * Required because Android 15-17 bpfloader/netbpfload/Scene see spoofed
+	 * uname releases (e.g. 6.1.75 / 5.10.199) different from 4.14.x.
+	 */
+	(void)kern_version;
+	return true;
 }
 
 /* last field in 'union bpf_attr' used by this command */

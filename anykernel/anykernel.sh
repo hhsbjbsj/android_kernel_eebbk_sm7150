@@ -1,7 +1,7 @@
 ### AnyKernel3 Workspace
 ### begin properties
 properties() { '
-kernel.string=EEBBK-S6-ReSukiSU-SUSFS-2.3.0
+kernel.string=EEBBK-S6-4.14.357-ReSukiSU-SUSFS-2.3.0
 do.devicecheck=0
 do.modules=0
 do.systemless=1

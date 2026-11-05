@@ -28,12 +28,13 @@ jobs:
       - name: Prepare environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex gawk \
-            git gnupg gperf imagemagick libncurses-dev \
+          sudo apt-get install -y bc bison build-essential ccache curl dwarves flex gawk \
+            git gnupg gperf imagemagick jq libncurses-dev \
             lib32readline-dev lib32z1-dev liblz4-tool \
             libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev python3 \
             cmake libelf-dev libdw-dev device-tree-compiler swig
+          pahole --version
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
 
       - name: Restore ccache
@@ -135,6 +136,88 @@ jobs:
               exit 1
           fi
 
+      - name: Verify 4.14.357 + ReSukiSU + SUSFS 2.3.0 + BTF + Binder Freeze
+        if: env.CHECK_FILE_IS_OK == 'true'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p out/artifacts
+          READELF_BIN="$HOME/toolchains/clang-r416183b/bin/llvm-readelf"
+          NM_BIN="$HOME/toolchains/clang-r416183b/bin/llvm-nm"
+
+          grep -q '^SUBLEVEL = 357$' Makefile
+          grep -Fq '4.14.357' out/include/generated/utsrelease.h
+          grep -Fq 'LINUX_VERSION_CODE 265983' out/include/generated/uapi/linux/version.h
+          grep -Fq 'LINUX_VERSION_SUBLEVEL 357' out/include/generated/uapi/linux/version.h
+
+          grep -qx 'CONFIG_KSU=y' out/.config
+          grep -qx 'CONFIG_KSU_MULTI_MANAGER_SUPPORT=y' out/.config
+          grep -qx 'CONFIG_KSU_SUSFS=y' out/.config
+          grep -qx 'CONFIG_DEBUG_INFO_BTF=y' out/.config
+          grep -qx 'CONFIG_KPROBES=y' out/.config
+          grep -qx 'CONFIG_ALWAYS_PERMISSIVE=y' out/.config
+          ! grep -q '^CONFIG_KPM=y$' out/.config
+
+          "$READELF_BIN" -S out/vmlinux > out/artifacts/vmlinux-sections.txt
+          "$NM_BIN" out/vmlinux > out/artifacts/vmlinux-nm.txt
+          grep -Fq '.BTF' out/artifacts/vmlinux-sections.txt
+          grep -Eq '[[:space:]]susfs_set_priority_uid_filter$' out/artifacts/vmlinux-nm.txt
+          grep -Eq '[[:space:]]susfs_is_priority_uid_filtered$' out/artifacts/vmlinux-nm.txt
+          grep -Eq '[[:space:]]ksu_handle_sys_reboot$' out/artifacts/vmlinux-nm.txt
+          grep -Eq '[[:space:]]ksu_handle_post_execveat_sucompat$' out/artifacts/vmlinux-nm.txt
+          grep -Eq '[[:space:]]bpf_get_btf_vmlinux$' out/artifacts/vmlinux-nm.txt
+          rm -f out/artifacts/vmlinux-sections.txt out/artifacts/vmlinux-nm.txt
+
+          grep -Fq 'BINDER_FREEZE' include/uapi/linux/android/binder.h
+          grep -Fq 'BINDER_GET_FROZEN_INFO' include/uapi/linux/android/binder.h
+          grep -Fq 'TF_UPDATE_TXN' include/uapi/linux/android/binder.h
+
+          KSU_COMMIT_VAL="$(cat drivers/kernelsu/.resukisu_commit_full 2>/dev/null || echo unknown)"
+          KSU_VERNAME_VAL="$(cat drivers/kernelsu/.resukisu_version_full 2>/dev/null || echo unknown)"
+          cat > out/artifacts/kernel-version-proof.txt <<EOF
+          kernel_version=4.14.357
+          sublevel=357
+          linux_version_code=265983
+          resukisu_commit=${KSU_COMMIT_VAL}
+          resukisu_version=${KSU_VERNAME_VAL}
+          susfs_version=v2.3.0
+          priority_uid_filter=enabled
+          embedded_btf=enabled
+          kprobes=enabled
+          kpm=disabled
+          EOF
+
+          export KSU_COMMIT_VAL KSU_VERNAME_VAL
+          python3 - <<'PY_MANIFEST'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = {
+              "target_device": "EEBBK S6 / P20H130 (sm7150)",
+              "kernel_version": "4.14.357",
+              "linux_version_code": 265983,
+              "reference_baseline": "android_kernel_oppo_sm6125-resukisu-final@f3b4ee6a48a03a67ece3b6699d3e07b4f278dca8 (Run 152)",
+              "bakasu_commit": os.environ.get("KSU_COMMIT_VAL", "unknown"),
+              "bakasu_version": os.environ.get("KSU_VERNAME_VAL", "unknown"),
+              "susfs_version": "v2.3.0",
+              "manager_dual_signatures": ["0x039a", "0x38b"],
+              "kpm_status": "disabled",
+              "capabilities": {
+                  "SUSFS_230_PRIORITY_UID_FILTER": True,
+                  "EMBEDDED_VMLINUX_BTF": True,
+                  "KPROBES_SCENE_BPF_FIX": True,
+                  "CGROUP_V2_FREEZER": True,
+                  "BINDER_FREEZE_AND_419_STABILITY": True,
+                  "DROIDSPACES_CONTAINER_NETWORKING": True,
+                  "SELINUX_BOOT_PERMISSIVE": True,
+              },
+          }
+          Path("out/artifacts/source-final-manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY_MANIFEST
+          echo "[PASS] Verified Linux 4.14.357 + ReSukiSU + SUSFS 2.3.0 + .BTF + Binder Freeze"
+
       - name: Build Android DTBO Image
         if: env.CHECK_FILE_IS_OK == 'true'
         run: |
@@ -162,29 +245,54 @@ jobs:
           cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           
           cd AnyKernel3
-          ZIP_NAME="EEBBK-S6-P20H130-ReSukiSU-SUSFS230-BootOnly-${{ env.BUILD_TIME }}.zip"
+          ZIP_NAME="EEBBK-S6-P20H130-4.14.357-ReSukiSU-SUSFS230-BootOnly-${{ env.BUILD_TIME }}.zip"
           zip -r "../$ZIP_NAME" *
           echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Publish GitHub Release
+        if: env.CHECK_FILE_IS_OK == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v4.14.357-s6-resukisu-run${GITHUB_RUN_NUMBER}"
+          RELEASE_FILES=("$ZIP_PATH" "out/artifacts/kernel-version-proof.txt" "out/artifacts/source-final-manifest.json")
+          if [ -f "out/artifacts/dtbo.img" ]; then
+            RELEASE_FILES+=("out/artifacts/dtbo.img")
+          fi
+          if command -v gh >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" "${RELEASE_FILES[@]}" \
+              --title "EEBBK S6 (H130) Linux 4.14.357 + ReSukiSU + SUSFS 2.3.0 (Run #${GITHUB_RUN_NUMBER})" \
+              --notes "Automated build of EEBBK S6 (P20H130 / SM7150) upgraded to Linux 4.14.357 with ReSukiSU (BakaSU main), SUSFS 2.3.0 (priority_uid_filter), embedded vmlinux BTF, Kprobes, Cgroup v2 Freezer, and Binder Freeze (ported from SM6125 Run #152 baseline)." || true
+          fi
 
       - name: Upload AnyKernel3 Flashable ZIP
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: EEBBK-S6-Flashable-AnyKernel3
+          name: EEBBK-S6-4.14.357-Flashable-AnyKernel3
           path: ${{ env.ZIP_PATH }}
+
+      - name: Upload Proof & Manifest
+        if: env.CHECK_FILE_IS_OK == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-manifest-4.14.357
+          path: |
+            out/artifacts/kernel-version-proof.txt
+            out/artifacts/source-final-manifest.json
 
       - name: Upload raw Image.gz
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Image-gz-4.14
+          name: Image-gz-4.14.357
           path: out/arch/arm64/boot/Image.gz
 
       - name: Upload DTB files
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dtbs-4.14
+          name: dtbs-4.14.357
           path: |
             out/arch/arm64/boot/dts/eebbk-qcom/*.dtb
             out/arch/arm64/boot/dts/eebbk-qcom/*.dtbo
@@ -194,5 +302,5 @@ jobs:
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dtbo-img-4.14
+          name: dtbo-img-4.14.357
           path: out/artifacts/dtbo.img

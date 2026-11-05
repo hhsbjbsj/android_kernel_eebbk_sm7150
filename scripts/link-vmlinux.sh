@@ -148,6 +148,7 @@ vmlinux_link()
 {
 	local lds="${objtree}/${KBUILD_LDS}"
 	local objects
+	local extra_objects="${1} ${btf_vmlinux_bin_o:-}"
 
 	if [ "${SRCARCH}" != "um" ]; then
 		local ld=${LD}
@@ -165,14 +166,14 @@ vmlinux_link()
 				--start-group				\
 				${KBUILD_VMLINUX_LIBS}			\
 				--end-group				\
-				${1}"
+				${extra_objects}"
 		else
 			objects="${KBUILD_VMLINUX_INIT}			\
 				--start-group				\
 				${KBUILD_VMLINUX_MAIN}			\
 				${KBUILD_VMLINUX_LIBS}			\
 				--end-group				\
-				${1}"
+				${extra_objects}"
 		fi
 
 		${ld} ${ldflags} -o ${2} -T ${lds} ${objects}
@@ -184,14 +185,14 @@ vmlinux_link()
 				-Wl,--start-group			\
 				${KBUILD_VMLINUX_LIBS}			\
 				-Wl,--end-group				\
-				${1}"
+				${extra_objects}"
 		else
 			objects="${KBUILD_VMLINUX_INIT}			\
 				-Wl,--start-group			\
 				${KBUILD_VMLINUX_MAIN}			\
 				${KBUILD_VMLINUX_LIBS}			\
 				-Wl,--end-group				\
-				${1}"
+				${extra_objects}"
 		fi
 
 		${CC} ${CFLAGS_vmlinux} -o ${2}				\
@@ -200,6 +201,48 @@ vmlinux_link()
 			-lutil -lrt -lpthread
 		rm -f linux
 	fi
+}
+
+# Generate .BTF type information from DWARF and turn it into a linkable object.
+# ${1} - temporary vmlinux image
+# ${2} - output object containing only .BTF
+gen_btf()
+{
+	local pahole_bin="${PAHOLE:-pahole}"
+	local pahole_ver
+	local llvm_objcopy_bin="${LLVM_OBJCOPY:-llvm-objcopy}"
+	local bin_arch="aarch64"
+	local bin_format="elf64-littleaarch64"
+
+	if ! command -v "${pahole_bin}" >/dev/null 2>&1; then
+		echo >&2 "BTF: pahole (${pahole_bin}) is not available"
+		return 1
+	fi
+
+	pahole_ver=$("${pahole_bin}" --version 2>/dev/null | sed -E 's/v([0-9]+)\.([0-9]+).*/\1\2/' | head -n1)
+	if [ -z "${pahole_ver}" ] || [ "${pahole_ver}" -lt 113 ]; then
+		echo >&2 "BTF: pahole version $("${pahole_bin}" --version 2>/dev/null || true) is too old; need >= 1.13"
+		return 1
+	fi
+
+	if ! command -v "${llvm_objcopy_bin}" >/dev/null 2>&1; then
+		llvm_objcopy_bin="${OBJCOPY}"
+	fi
+
+	info BTF "${2}"
+	vmlinux_link "" "${1}"
+	LLVM_OBJCOPY="${llvm_objcopy_bin}" "${pahole_bin}" -J "${1}"
+
+	if [ "${SRCARCH}" != "arm64" ]; then
+		bin_arch=$(LANG=C "${OBJDUMP}" -f "${1}" | grep architecture | cut -d, -f1 | cut -d' ' -f2)
+		bin_format=$(LANG=C "${OBJDUMP}" -f "${1}" | grep 'file format' | awk '{print $4}')
+	fi
+
+	"${llvm_objcopy_bin}" --dump-section .BTF=.btf.vmlinux.bin "${1}"
+	"${OBJCOPY}" -I binary -O "${bin_format}" -B "${bin_arch}" \
+		--rename-section .data=.BTF,alloc,load,readonly,data .btf.vmlinux.bin "${2}"
+	test -s .btf.vmlinux.bin
+	test -s "${2}"
 }
 
 # Create ${2} .o file with all symbols from the ${1} object file
@@ -273,6 +316,7 @@ sortextable()
 # Delete output files in case of error
 cleanup()
 {
+	rm -f .btf.vmlinux.bin .btf.vmlinux.bin.o .tmp_vmlinux.btf
 	rm -f .old_version
 	rm -f .tmp_System.map
 	rm -f .tmp_kallsyms*
@@ -364,6 +408,16 @@ if [ ! -z ${RTIC_MPGEN+x} ]; then
 	rtic_mp vmlinux.o rtic_mp.o .tmp_rtic_mp_sz1 .tmp_rtic_mp1.c
 	KBUILD_VMLINUX_LIBS+=" "
 	KBUILD_VMLINUX_LIBS+=$RTIC_MP_O
+fi
+
+# Build BTF before kallsyms so all temporary/final links include the same BTF object.
+btf_vmlinux_bin_o=""
+if [ -n "${CONFIG_DEBUG_INFO_BTF}" ]; then
+	if ! gen_btf .tmp_vmlinux.btf .btf.vmlinux.bin.o; then
+		echo >&2 'Failed to generate BTF for vmlinux'
+		exit 1
+	fi
+	btf_vmlinux_bin_o=.btf.vmlinux.bin.o
 fi
 
 kallsymso=""

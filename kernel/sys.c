@@ -190,6 +190,10 @@ out:
 	return error;
 }
 
+#ifdef CONFIG_KSU_SUSFS
+extern bool susfs_is_priority_uid_filtered(uid_t uid);
+#endif // #ifdef CONFIG_KSU_SUSFS
+
 SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 {
 	struct task_struct *g, *p;
@@ -235,6 +239,10 @@ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 		if (!who)
 			uid = cred->uid;
 		else if (!uid_eq(uid, cred->uid)) {
+#ifdef CONFIG_KSU_SUSFS
+			if (cred->uid.val >= 10000 && susfs_is_priority_uid_filtered(uid.val))
+				goto out_unlock;
+#endif // #ifdef CONFIG_KSU_SUSFS
 			user = find_user(uid);
 			if (!user)
 				goto out_unlock;	/* No processes for this user */
@@ -303,6 +311,10 @@ SYSCALL_DEFINE2(getpriority, int, which, int, who)
 		if (!who)
 			uid = cred->uid;
 		else if (!uid_eq(uid, cred->uid)) {
+#ifdef CONFIG_KSU_SUSFS
+			if (cred->uid.val >= 10000 && susfs_is_priority_uid_filtered(uid.val))
+				goto out_unlock;
+#endif // #ifdef CONFIG_KSU_SUSFS
 			user = find_user(uid);
 			if (!user)
 				goto out_unlock;	/* No processes for this user */
@@ -1210,7 +1222,7 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	if (!strncmp(current->comm, "bpfloader", 9) ||
 	    !strncmp(current->comm, "netbpfload", 10)) {
 		strcpy(tmp.release, "6.1.75");
-		pr_info("fake uname: %s/%d (uid %u) release=%s\n",
+		pr_info_ratelimited("fake uname: %s/%d (uid %u) release=%s\n",
 			current->comm, current->pid, uid, tmp.release);
 	} else if (!strncmp(current->comm, "netd", 4) ||
 		   !strncmp(current->comm, "clatd", 5) ||
@@ -1218,7 +1230,7 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 		   !strcmp(current->comm, "system_server") ||
 		   (uid == 1000)) {
 		strcpy(tmp.release, "5.10.199");
-		pr_info("fake uname: %s/%d (uid %u) release=%s\n",
+		pr_info_ratelimited("fake uname: %s/%d (uid %u) release=%s\n",
 			current->comm, current->pid, uid, tmp.release);
 	}
 	up_read(&uts_sem);
