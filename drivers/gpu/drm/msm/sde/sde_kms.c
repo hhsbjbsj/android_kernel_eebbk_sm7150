@@ -3064,6 +3064,7 @@ static int _sde_kms_mmu_destroy(struct sde_kms *sde_kms)
 
 		sde_kms->aspace[i] = NULL;
 	}
+	sde_kms->base.aspace = NULL;
 
 	return 0;
 }
@@ -3110,6 +3111,8 @@ static int _sde_kms_mmu_init(struct sde_kms *sde_kms)
 		}
 
 		sde_kms->aspace[i] = aspace;
+		if (i == MSM_SMMU_DOMAIN_UNSECURE)
+			sde_kms->base.aspace = aspace;
 
 		ret = mmu->funcs->attach(mmu, (const char **)iommu_ports,
 				ARRAY_SIZE(iommu_ports));

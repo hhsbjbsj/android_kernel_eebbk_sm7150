@@ -90,6 +90,7 @@
 
 #ifdef MSM_PLATFORM
 #include <soc/qcom/subsystem_restart.h>
+#include <soc/qcom/subsystem_notif.h>
 #endif
 #include <wlan_hdd_hostapd.h>
 #include <wlan_hdd_softap_tx_rx.h>
@@ -15435,19 +15436,52 @@ void hdd_init_start_completion(void)
 }
 
 static int hdd_driver_load(void);
+static DEFINE_MUTEX(hdd_load_mutex);
+
+#ifdef MSM_PLATFORM
+static void wlan_hdd_modem_powerup_work_fn(struct work_struct *work)
+{
+	mutex_lock(&hdd_load_mutex);
+	if (!hdd_loaded) {
+		pr_info("wlan: Modem powered up, auto-loading HDD driver\n");
+		if (hdd_driver_load())
+			pr_err("wlan: Failed to auto-load HDD driver\n");
+	}
+	mutex_unlock(&hdd_load_mutex);
+}
+
+static DECLARE_DELAYED_WORK(wlan_hdd_modem_powerup_work,
+			    wlan_hdd_modem_powerup_work_fn);
+
+static int wlan_hdd_modem_ssr_nb_cb(struct notifier_block *nb,
+				    unsigned long code, void *data)
+{
+	if (code == SUBSYS_AFTER_POWERUP && !hdd_loaded)
+		schedule_delayed_work(&wlan_hdd_modem_powerup_work,
+				      msecs_to_jiffies(2000));
+	return NOTIFY_OK;
+}
+
+static struct notifier_block wlan_hdd_modem_ssr_nb = {
+	.notifier_call = wlan_hdd_modem_ssr_nb_cb,
+};
+static void *wlan_hdd_modem_notif_handle;
+#endif
+
 static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 						const char __user *user_buf,
 						size_t count,
 						loff_t *f_pos)
 {
-	char buf[3];
+	char buf[4] = {0};
 	static const char wlan_off_str[] = "OFF";
 	static const char wlan_on_str[] = "ON";
 	int ret;
 	unsigned long rc;
 	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	size_t copy_len = min_t(size_t, count, 3);
 
-	if (copy_from_user(buf, user_buf, 3)) {
+	if (!copy_len || copy_from_user(buf, user_buf, copy_len)) {
 		pr_err("Failed to read buffer\n");
 		return -EINVAL;
 	}
@@ -15466,12 +15500,15 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 		goto exit;
 	}
 
+	mutex_lock(&hdd_load_mutex);
 	if (!hdd_loaded) {
 		if (hdd_driver_load()) {
+			mutex_unlock(&hdd_load_mutex);
 			pr_err("%s: Failed to init hdd module\n", __func__);
 			goto exit;
 		}
 	}
+	mutex_unlock(&hdd_load_mutex);
 
 	if (!cds_is_driver_loaded() || cds_is_driver_recovering()) {
 		rc = wait_for_completion_timeout(&wlan_start_comp,
@@ -16484,6 +16521,13 @@ static int hdd_module_init(void)
 	if (ret)
 		pr_err("wlan_hdd_state_create:%x\n", ret);
 
+#ifdef MSM_PLATFORM
+	wlan_hdd_modem_notif_handle =
+		subsys_notif_register_notifier("modem", &wlan_hdd_modem_ssr_nb);
+	if (IS_ERR_OR_NULL(wlan_hdd_modem_notif_handle))
+		wlan_hdd_modem_notif_handle = NULL;
+#endif
+
 	return ret;
 }
 
@@ -16498,6 +16542,14 @@ static int hdd_module_init(void)
  */
 static void __exit hdd_module_exit(void)
 {
+#ifdef MSM_PLATFORM
+	if (wlan_hdd_modem_notif_handle) {
+		subsys_notif_unregister_notifier(wlan_hdd_modem_notif_handle,
+						 &wlan_hdd_modem_ssr_nb);
+		wlan_hdd_modem_notif_handle = NULL;
+	}
+	cancel_delayed_work_sync(&wlan_hdd_modem_powerup_work);
+#endif
 	hdd_driver_unload();
 }
 

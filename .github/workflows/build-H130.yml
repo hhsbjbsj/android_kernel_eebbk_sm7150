@@ -158,6 +158,35 @@ jobs:
           grep -qx 'CONFIG_ALWAYS_PERMISSIVE=y' out/.config
           ! grep -q '^CONFIG_KPM=y$' out/.config
 
+          # Verify KERNEL-REQUESTS.md requirements:
+          # 1. WiFi icnss legacy mode (no QMI wait)
+          grep -qx 'CONFIG_ICNSS=y' out/.config
+          ! grep -q '^CONFIG_ICNSS_QMI=y$' out/.config
+          grep -qx 'CONFIG_QCA_CLD_WLAN=y' out/.config
+          grep -qx 'CONFIG_QCOM_QMI_HELPERS=y' out/.config
+          grep -qx 'CONFIG_QRTR=y' out/.config
+
+          # 2. Framebuffer Console (fbcon + DRM fbdev emulation)
+          grep -qx 'CONFIG_DRM_FBDEV_EMULATION=y' out/.config
+          grep -qx 'CONFIG_DRM_FBDEV_OVERALLOC=100' out/.config
+          grep -qx 'CONFIG_FRAMEBUFFER_CONSOLE=y' out/.config
+          grep -qx 'CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y' out/.config
+
+          # 3. USB Gadget 3-Channel (ACM + RNDIS + ECM + OBEX + SERIAL)
+          grep -qx 'CONFIG_USB_CONFIGFS_ACM=y' out/.config
+          grep -qx 'CONFIG_USB_F_ACM=y' out/.config
+          grep -qx 'CONFIG_USB_U_SERIAL=y' out/.config
+          grep -qx 'CONFIG_USB_CONFIGFS_RNDIS=y' out/.config
+          grep -qx 'CONFIG_USB_F_RNDIS=y' out/.config
+          grep -qx 'CONFIG_USB_CONFIGFS_ECM=y' out/.config
+          grep -qx 'CONFIG_USB_F_ECM=y' out/.config
+          grep -qx 'CONFIG_USB_CONFIGFS_ECM_SUBSET=y' out/.config
+          grep -qx 'CONFIG_USB_F_ECM_SUBSET=y' out/.config
+          grep -qx 'CONFIG_USB_CONFIGFS_OBEX=y' out/.config
+          grep -qx 'CONFIG_USB_F_OBEX=y' out/.config
+          grep -qx 'CONFIG_USB_CONFIGFS_SERIAL=y' out/.config
+          grep -qx 'CONFIG_USB_F_SERIAL=y' out/.config
+
           "$READELF_BIN" -S out/vmlinux > out/artifacts/vmlinux-sections.txt
           "$NM_BIN" out/vmlinux > out/artifacts/vmlinux-nm.txt
           grep -Fq '.BTF' out/artifacts/vmlinux-sections.txt
@@ -275,14 +304,17 @@ jobs:
           name: EEBBK-S6-4.14.357-Flashable-AnyKernel3
           path: ${{ env.ZIP_PATH }}
 
-      - name: Upload Proof & Manifest
+      - name: Upload Proof, Manifest, .config & System.map
         if: env.CHECK_FILE_IS_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: proof-manifest-4.14.357
+          include-hidden-files: true
           path: |
             out/artifacts/kernel-version-proof.txt
             out/artifacts/source-final-manifest.json
+            out/.config
+            out/System.map
 
       - name: Upload raw Image.gz
         if: env.CHECK_FILE_IS_OK == 'true'

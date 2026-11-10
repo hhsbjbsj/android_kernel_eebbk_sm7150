@@ -1375,6 +1375,8 @@ static inline int check_modstruct_version(const struct load_info *info,
 static inline int same_magic(const char *amagic, const char *bmagic,
 			     bool has_crcs)
 {
+	amagic += strcspn(amagic, " ");
+	bmagic += strcspn(bmagic, " ");
 	return strcmp(amagic, bmagic) == 0;
 }
 #endif /* CONFIG_MODVERSIONS */

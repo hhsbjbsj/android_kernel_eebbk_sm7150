@@ -50,7 +50,7 @@ static inline int wlfw_rejuvenate_ack_send_sync_msg(struct icnss_priv *priv)
 	return 0;
 }
 static inline void icnss_ignore_fw_timeout(bool ignore) {}
-static int wlfw_send_modem_shutdown_msg(struct icnss_priv *priv)
+static inline int wlfw_send_modem_shutdown_msg(struct icnss_priv *priv)
 {
 	return 0;
 }

@@ -67,7 +67,11 @@
 #define ICNSS_THRESHOLD_GUARD		20000
 #define ICNSS_DEFAULT_FEATURE_MASK 0x01
 
+#ifdef CONFIG_ICNSS_QMI
 #define ICNSS_QUIRKS_DEFAULT		BIT(FW_REJUVENATE_ENABLE)
+#else
+#define ICNSS_QUIRKS_DEFAULT		(BIT(FW_REJUVENATE_ENABLE) | BIT(SKIP_QMI))
+#endif
 #define ICNSS_MAX_PROBE_CNT		2
 
 #define SUBSYS_INTERNAL_MODEM_NAME	"modem"
@@ -1257,8 +1261,10 @@ static int icnss_driver_event_register_driver(void *data)
 
 	penv->ops = data;
 
-	if (test_bit(SKIP_QMI, &quirks))
+	if (test_bit(SKIP_QMI, &quirks)) {
+		clear_bit(ICNSS_FW_DOWN, &penv->state);
 		set_bit(ICNSS_FW_READY, &penv->state);
+	}
 
 	if (test_bit(ICNSS_FW_DOWN, &penv->state)) {
 		icnss_pr_err("FW is in bad state, state: 0x%lx\n",
@@ -1598,6 +1604,17 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 
 	if (code == SUBSYS_AFTER_SHUTDOWN)
 		clear_bit(ICNSS_MODEM_SHUTDOWN, &priv->state);
+
+	if (code == SUBSYS_AFTER_POWERUP && test_bit(SKIP_QMI, &quirks)) {
+		clear_bit(ICNSS_MODEM_SHUTDOWN, &priv->state);
+		clear_bit(ICNSS_MODEM_CRASHED, &priv->state);
+		clear_bit(ICNSS_FW_DOWN, &priv->state);
+		set_bit(ICNSS_FW_READY, &priv->state);
+		if (priv->ops && !test_bit(ICNSS_DRIVER_PROBED, &priv->state))
+			icnss_driver_event_post(ICNSS_DRIVER_EVENT_FW_READY_IND,
+						0, NULL);
+		return NOTIFY_OK;
+	}
 
 	if (code != SUBSYS_BEFORE_SHUTDOWN)
 		return NOTIFY_OK;
