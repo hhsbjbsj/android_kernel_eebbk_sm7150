@@ -181,7 +181,7 @@ jobs:
           grep -qx 'CONFIG_USB_CONFIGFS_ECM=y' out/.config
           grep -qx 'CONFIG_USB_F_ECM=y' out/.config
           grep -qx 'CONFIG_USB_CONFIGFS_ECM_SUBSET=y' out/.config
-          grep -qx 'CONFIG_USB_F_ECM_SUBSET=y' out/.config
+          grep -qx 'CONFIG_USB_F_SUBSET=y' out/.config
           grep -qx 'CONFIG_USB_CONFIGFS_OBEX=y' out/.config
           grep -qx 'CONFIG_USB_F_OBEX=y' out/.config
           grep -qx 'CONFIG_USB_CONFIGFS_SERIAL=y' out/.config
